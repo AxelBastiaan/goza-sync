@@ -5,8 +5,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
-ENV npm_config_build_from_source=true
-RUN npm ci --build-from-source=better-sqlite3
+RUN npm ci
+RUN npm rebuild better-sqlite3 --build-from-source --verbose
 
 COPY tsconfig.json ./
 COPY src ./src
@@ -15,6 +15,9 @@ RUN npm run build
 FROM --platform=linux/amd64 node:20-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production
+
+RUN apt-get update && apt-get install -y --no-install-recommends file \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
