@@ -14,13 +14,20 @@ export interface ShopeeStoreCredentials {
 }
 
 // Confirmed from Shopee's official "API calls" doc (2025-11-21): API-call base URLs
-// (distinct from the browser-facing authorization URLs in shopeeGetAuthUrl.ts, which
-// live on a different host). partner.shopeemobile.com is the production host "for
+// (distinct from the browser-facing authorization URLs in shopeeAuth.ts, which live
+// on a different host). partner.shopeemobile.com is the production host "for
 // developers who deployed their services near SG" (the relevant region for an
 // Indonesian shop); the sandbox host is openplatform.sandbox.test-stable.shopee.sg —
 // NOT partner.test-stable.shopeemobile.com, which was an earlier guess sourced from
 // third-party SDK code and is wrong per the official doc.
-const BASE_URL = getEnv("SHOPEE_BASE_URL") || "https://partner.shopeemobile.com";
+//
+// Driven by the same SHOPEE_USE_SANDBOX flag as buildShopeeAuthUrl() in shopeeAuth.ts
+// — both the browser auth host and this API host must switch together, or requests
+// end up signed/sent for the wrong environment. SHOPEE_BASE_URL remains as a manual
+// override for edge cases, but normally only SHOPEE_USE_SANDBOX needs to be set.
+const BASE_URL =
+  getEnv("SHOPEE_BASE_URL") ||
+  (getEnv("SHOPEE_USE_SANDBOX") === "true" ? "https://openplatform.sandbox.test-stable.shopee.sg" : "https://partner.shopeemobile.com");
 
 // Shopee's v2 signature — confirmed from the official doc, not just third-party SDK
 // source: HMAC-SHA256 hex digest, keyed by partner_key, over a plain concatenation
