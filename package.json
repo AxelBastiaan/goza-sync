@@ -1,0 +1,46 @@
+{
+  "name": "goza-sync",
+  "version": "1.0.0",
+  "description": "Accurate Online <-> TikTok Shop (and later Shopee) stock sync backend",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "nodemon --watch src --ext ts --exec ts-node src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "exchange-token": "ts-node src/scripts/exchangeToken.ts",
+    "get-shops": "ts-node src/scripts/getShops.ts",
+    "get-products": "ts-node src/scripts/getProducts.ts",
+    "update-inventory": "ts-node src/scripts/updateInventory.ts",
+    "get-items": "ts-node src/scripts/getItems.ts",
+    "test-accurate-host": "ts-node src/scripts/testAccurateHost.ts",
+    "get-warehouses": "ts-node src/scripts/getWarehouses.ts",
+    "shopee-get-auth-url": "ts-node src/scripts/shopeeGetAuthUrl.ts",
+    "shopee-exchange-token": "ts-node src/scripts/shopeeExchangeToken.ts",
+    "generate-sales-recall": "ts-node --project sales-recall/tsconfig.json sales-recall/scripts/generateSalesRecall.ts",
+    "generate-customer-ratings": "ts-node --project sales-recall/tsconfig.json sales-recall/scripts/generateCustomerRatings.ts",
+    "append-missing-category-skus": "ts-node --project sales-recall/tsconfig.json sales-recall/scripts/appendMissingCategorySkus.ts",
+    "archive-discontinued-skus": "ts-node --project sales-recall/tsconfig.json sales-recall/scripts/archiveDiscontinuedSkus.ts"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "axios": "^1.7.7",
+    "better-sqlite3": "^13.0.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1",
+    "pdfkit": "^0.19.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/archiver": "^6.0.4",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.9.0",
+    "@types/pdfkit": "^0.17.6",
+    "nodemon": "^3.1.7",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.1": true
+  }
+}

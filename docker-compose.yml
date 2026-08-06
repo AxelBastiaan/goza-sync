@@ -1,0 +1,36 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    expose:
+      - "8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - PORT=8000
+      - APP_KEY=${APP_KEY}
+      - APP_SECRET=${APP_SECRET}
+      - AUTH_CODE=${AUTH_CODE}
+      - ACCESS_TOKEN=${ACCESS_TOKEN}
+      - REFRESH_TOKEN=${REFRESH_TOKEN}
+      - SHOP_CIPHER=${SHOP_CIPHER}
+      - ACCURATE_APP_KEY=${ACCURATE_APP_KEY}
+      - ACCURATE_SIGNATURE_SECRET=${ACCURATE_SIGNATURE_SECRET}
+      - ACCURATE_API_TOKEN=${ACCURATE_API_TOKEN}
+      - ACCURATE_HOST=${ACCURATE_HOST}
+      - ACCURATE_TIKTOK_CUSTOMER_ID=${ACCURATE_TIKTOK_CUSTOMER_ID}
+      - ACCURATE_WAREHOUSE_ID=${ACCURATE_WAREHOUSE_ID}
+      - TIKTOK_SERVICE_ID=${TIKTOK_SERVICE_ID}
+      - SHOPEE_REDIRECT_URL=${SHOPEE_REDIRECT_URL}
+      - SHOPEE_PARTNER_ID=${SHOPEE_PARTNER_ID}
+      - SHOPEE_PARTNER_KEY=${SHOPEE_PARTNER_KEY}
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app

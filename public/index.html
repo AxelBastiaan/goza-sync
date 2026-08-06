@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>goza-sync</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <nav class="sidebar">
+    <h1>goza-sync</h1>
+    <div class="nav-item active" data-view="mapping"><span class="nav-icon">📦</span> Product Mapping</div>
+    <div class="nav-item" data-view="integrations"><span class="nav-icon">🔌</span> Integrations</div>
+    <div class="nav-item" data-view="import"><span class="nav-icon">⬇️</span> Import</div>
+    <div class="nav-item" data-view="settings"><span class="nav-icon">⚙️</span> Settings</div>
+  </nav>
+
+  <div class="content">
+
+    <!-- ============ Product Mapping view ============ -->
+    <section class="view" id="view-mapping">
+      <main class="card">
+        <h2>Product Mapping</h2>
+        <p class="subtitle">Map a marketplace SKU to an Accurate item + unit (PCS/PAK/CTN). The same SKU is checked across every connected store.</p>
+
+        <div class="toolbar">
+          <form id="add-form">
+            <input type="text" id="accurate-sku-input" placeholder="Accurate SKU" autocomplete="off" required />
+            <button type="submit" id="add-btn"><span id="add-btn-text">Add</span></button>
+          </form>
+          <button type="button" class="secondary icon-btn" id="refresh-btn" title="Reload current stock from Accurate">↻</button>
+        </div>
+
+        <p id="message" class="message" hidden></p>
+
+        <div id="accordion-list"></div>
+        <p id="empty-state" class="empty-state" hidden>No Accurate SKUs mapped yet — add one above.</p>
+
+        <hr />
+
+        <h2 style="font-size:1.1rem;">Sync</h2>
+        <div class="sync-row">
+          <button id="sync-btn-tiktok" type="button">Sync Now (Accurate → TikTok)</button>
+          <button id="sync-btn-shopee" type="button">Sync Now (Accurate → Shopee)</button>
+        </div>
+        <p id="sync-message" class="message" hidden></p>
+        <div id="sync-summary-details"></div>
+      </main>
+    </section>
+
+    <!-- ============ Integrations view ============ -->
+    <section class="view" id="view-integrations" hidden>
+      <main class="card">
+        <h2>Integrations</h2>
+        <p class="subtitle">Connect your marketplace stores. Authorizing opens a new tab — come back here once you're done.</p>
+        <p id="integrations-message" class="message" hidden></p>
+        <div id="integrations-list"></div>
+      </main>
+    </section>
+
+    <!-- ============ Import view ============ -->
+    <section class="view" id="view-import" hidden>
+      <main class="card">
+        <h2>Import SKUs</h2>
+        <p class="subtitle">Scan a connected store for SKUs not yet mapped, and check which ones already exist in Accurate.</p>
+
+        <div class="store-picker-row">
+          <label for="import-store-picker">Store</label>
+          <select id="import-store-picker"></select>
+        </div>
+        <button type="button" class="secondary" id="import-scan-btn" style="margin-bottom:1rem;">↻ Scan for new SKUs</button>
+        <p id="import-message" class="message" hidden></p>
+        <div id="import-summary-details"></div>
+
+        <table id="import-table" hidden>
+          <thead><tr><th></th><th>Marketplace SKU</th><th>Accurate match</th><th>Satuan</th></tr></thead>
+          <tbody id="import-rows"></tbody>
+        </table>
+
+        <button type="button" id="import-commit-btn" style="margin-top:1rem;" hidden>Import 0 selected</button>
+      </main>
+    </section>
+
+    <!-- ============ Settings view ============ -->
+    <section class="view" id="view-settings" hidden>
+      <main class="card">
+        <h2>Settings</h2>
+        <div id="live-mode-banner" class="live-mode-banner">
+          <div class="live-mode-text">
+            <strong id="live-mode-label">Live Mode: OFF</strong>
+            <p class="live-mode-desc">When ON, real TikTok orders create real Sales Orders/Delivery Orders/Invoices in Accurate. When OFF, incoming order webhooks are logged only.</p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="live-mode-toggle" />
+            <span class="slider"></span>
+          </label>
+        </div>
+      </main>
+    </section>
+
+  </div>
+
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal">
+      <h2 id="modal-title">Mappings for SKU</h2>
+      <div id="modal-rows"></div>
+      <button type="button" class="secondary" id="add-row-btn">+ Add another mapping</button>
+      <div class="modal-footer">
+        <span></span>
+        <button type="button" id="modal-close-btn">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="stores-overlay">
+    <div class="modal">
+      <h2 id="stores-title">Stores</h2>
+      <div id="stores-rows"></div>
+      <div class="modal-footer">
+        <span></span>
+        <button type="button" id="stores-close-btn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
