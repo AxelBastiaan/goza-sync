@@ -5,7 +5,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
-RUN npm ci
+ENV npm_config_build_from_source=true
+RUN npm ci --build-from-source=better-sqlite3
 
 COPY tsconfig.json ./
 COPY src ./src
