@@ -1,12 +1,15 @@
 FROM --platform=linux/amd64 node:20-bookworm-slim AS builder
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ file \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
 RUN npm ci
-RUN npm rebuild better-sqlite3 --build-from-source --verbose
+RUN rm -rf node_modules/better-sqlite3/prebuilds node_modules/better-sqlite3/build \
+    && npm rebuild better-sqlite3 --build-from-source --verbose \
+    && test -f node_modules/better-sqlite3/build/Release/better_sqlite3.node \
+    && file node_modules/better-sqlite3/build/Release/better_sqlite3.node | grep -q ELF
 
 COPY tsconfig.json ./
 COPY src ./src
