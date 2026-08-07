@@ -3,8 +3,9 @@ set -e
 
 mkdir -p /app/data
 
-if [ ! -f /app/data/gozasync.db ] && [ -n "$DB_SEED_TOKEN" ]; then
-  echo "[entrypoint] No existing database found, downloading initial seed..."
+DB_SIZE=$(stat -c%s /app/data/gozasync.db 2>/dev/null || echo 0)
+if [ "$DB_SIZE" -lt 1000000 ] && [ -n "$DB_SEED_TOKEN" ]; then
+  echo "[entrypoint] No real database found (size=$DB_SIZE), downloading initial seed..."
   curl -sSfL -H "Authorization: token $DB_SEED_TOKEN" \
     -o /app/data/gozasync.db \
     https://raw.githubusercontent.com/AxelBastiaan/goza-sync-data/master/gozasync.db

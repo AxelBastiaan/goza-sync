@@ -50,17 +50,19 @@ export async function fetchShopeeSkuMap(credentials: ShopeeStoreCredentials): Pr
       break;
     }
 
-    // get_item_list doesn't return item_name — a separate get_item_base_info call
-    // (max 50 ids per request) is needed to resolve it, same "unconfirmed until a
-    // live shop" caveat as the rest of this function.
-    const itemNames = new Map<number, string>();
+    // get_item_list doesn't return item_name/item_sku — a separate get_item_base_info
+    // call (max 50 ids per request) resolves both. Confirmed live: an item with no
+    // variations (has_model: false) carries its SKU directly here as item_sku, with
+    // get_model_list returning an empty model array for it — so this is also the
+    // fallback SKU source for non-variant items, not just a name lookup.
+    const itemBaseInfo = new Map<number, { name: string; sku?: string }>();
     for (let i = 0; i < items.length; i += 50) {
       const chunk = items.slice(i, i + 50).map((it) => it.item_id);
       const baseInfoResponse = await callShopeeApi("GET", "/api/v2/product/get_item_base_info", { item_id_list: chunk.join(",") }, null, credentials);
       const baseInfoData = baseInfoResponse.data;
       if (baseInfoData?.error) continue;
-      for (const item of (baseInfoData?.response?.item_list ?? []) as { item_id: number; item_name?: string }[]) {
-        itemNames.set(item.item_id, item.item_name ?? "");
+      for (const item of (baseInfoData?.response?.item_list ?? []) as { item_id: number; item_name?: string; item_sku?: string }[]) {
+        itemBaseInfo.set(item.item_id, { name: item.item_name ?? "", sku: item.item_sku });
       }
     }
 
@@ -72,8 +74,22 @@ export async function fetchShopeeSkuMap(credentials: ShopeeStoreCredentials): Pr
           return; // skip items whose model list fails to load rather than aborting the whole sweep
         }
 
-        const itemName = itemNames.get(item.item_id) ?? "";
+        const itemName = itemBaseInfo.get(item.item_id)?.name ?? "";
         const models = (modelData?.response?.model ?? []) as { model_id: number; model_sku?: string }[];
+
+        if (models.length === 0) {
+          // No variations — the item's own item_sku is what a seller actually set,
+          // and model_id 0 is Shopee's documented convention for updating stock on
+          // a non-variant item (confirmed live).
+          const sellerSku = itemBaseInfo.get(item.item_id)?.sku;
+          if (sellerSku) {
+            const existing = map.get(sellerSku) ?? [];
+            existing.push({ itemId: item.item_id, modelId: 0, itemName });
+            map.set(sellerSku, existing);
+          }
+          return;
+        }
+
         for (const model of models) {
           const sellerSku = model.model_sku;
           if (!sellerSku) continue;
