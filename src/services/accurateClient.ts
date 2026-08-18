@@ -36,13 +36,25 @@ export function clearAccurateCredentials(): void {
   updateEnv("ACCURATE_HOST", "");
 }
 
+// dd/mm/yyyy hh:nn:ss — one of Accurate's accepted formats. Accurate compares this
+// against ITS OWN clock (Asia/Jakarta) and rejects anything more than 600s apart, so
+// the timestamp must be Jakarta wall-clock time no matter where this process runs.
+// Reading it off the host's local timezone silently broke every signed call in the
+// Docker container, which runs UTC: 7 hours out, so 100% rejection.
 function formatTimestamp(date: Date): string {
-  // dd/mm/yyyy hh:nn:ss — one of Accurate's accepted formats
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return (
-    `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()} ` +
-    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
-  );
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Jakarta",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)!.value;
+  return `${get("day")}/${get("month")}/${get("year")} ${get("hour")}:${get("minute")}:${get("second")}`;
 }
 
 export function getSignedHeaders(): Record<string, string> {
