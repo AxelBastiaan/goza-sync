@@ -518,6 +518,11 @@ async function loadIntegrations() {
 
   integrationsList.innerHTML = "";
   for (const p of platforms) {
+    if (p.platform === "accurate") {
+      integrationsList.appendChild(renderAccurateGroup(p));
+      continue;
+    }
+
     const group = document.createElement("div");
     group.className = "platform-group";
 
@@ -537,8 +542,19 @@ async function loadIntegrations() {
         row.className = "store-row";
         row.innerHTML = `
           <div class="store-info"><div class="store-name">${s.name}</div></div>
-          <span class="status-badge connected">Connected</span>
         `;
+        const statusBadge = document.createElement("span");
+        statusBadge.className = "status-badge connected";
+        statusBadge.textContent = "Connected";
+        row.appendChild(statusBadge);
+
+        const disconnectBtn = document.createElement("button");
+        disconnectBtn.className = "danger";
+        disconnectBtn.textContent = "Disconnect";
+        disconnectBtn.title = `Disconnect ${s.name}`;
+        disconnectBtn.addEventListener("click", () => disconnectStore(s.id, s.name));
+        row.appendChild(disconnectBtn);
+
         group.appendChild(row);
       }
     }
@@ -553,6 +569,111 @@ async function loadIntegrations() {
   }
 
   return platforms;
+}
+
+function renderAccurateGroup(p) {
+  const group = document.createElement("div");
+  group.className = "platform-group";
+
+  const header = document.createElement("div");
+  header.className = "platform-group-header";
+  header.innerHTML = `<span class="platform-icon accurate">A</span><span class="platform-group-title">${p.name}</span>`;
+  group.appendChild(header);
+
+  if (p.connected) {
+    const row = document.createElement("div");
+    row.className = "store-row";
+    row.innerHTML = `<div class="store-info"><div class="store-name">Accurate Online</div></div>`;
+
+    const statusBadge = document.createElement("span");
+    statusBadge.className = "status-badge connected";
+    statusBadge.textContent = "Connected";
+    row.appendChild(statusBadge);
+
+    const disconnectBtn = document.createElement("button");
+    disconnectBtn.className = "danger";
+    disconnectBtn.textContent = "Disconnect";
+    disconnectBtn.title = "Disconnect Accurate Online";
+    disconnectBtn.addEventListener("click", () => disconnectAccurate());
+    row.appendChild(disconnectBtn);
+
+    group.appendChild(row);
+  } else {
+    const note = document.createElement("p");
+    note.className = "empty-note";
+    note.textContent = "Not connected. Enter your Accurate Online app credentials below.";
+    group.appendChild(note);
+
+    const form = document.createElement("form");
+    form.className = "accurate-connect-form";
+    form.innerHTML = `
+      <input type="text" id="accurate-app-key" placeholder="App Key" autocomplete="off" required />
+      <input type="text" id="accurate-signature-secret" placeholder="Signature Secret" autocomplete="off" required />
+      <input type="text" id="accurate-api-token" placeholder="API Token" autocomplete="off" required />
+      <button type="submit" id="accurate-connect-btn">Connect</button>
+    `;
+    form.addEventListener("submit", connectAccurate);
+    group.appendChild(form);
+  }
+
+  return group;
+}
+
+async function connectAccurate(e) {
+  e.preventDefault();
+  const appKey = document.getElementById("accurate-app-key").value.trim();
+  const signatureSecret = document.getElementById("accurate-signature-secret").value.trim();
+  const apiToken = document.getElementById("accurate-api-token").value.trim();
+  const btn = document.getElementById("accurate-connect-btn");
+
+  btn.disabled = true;
+  btn.textContent = "Connecting…";
+  try {
+    const res = await fetch("/api/integrations/accurate/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ appKey, signatureSecret, apiToken }),
+    });
+    const result = await res.json();
+    if (!res.ok) {
+      showIntegrationsMessage(result.error || "Failed to connect to Accurate", "error");
+      btn.disabled = false;
+      btn.textContent = "Connect";
+      return;
+    }
+    showIntegrationsMessage("Connected to Accurate Online.", "success");
+    await loadIntegrations();
+  } catch (err) {
+    showIntegrationsMessage("Failed to reach the server", "error");
+    btn.disabled = false;
+    btn.textContent = "Connect";
+  }
+}
+
+async function disconnectAccurate() {
+  if (!confirm("Disconnect Accurate Online? Stock sync will stop working until you reconnect.")) return;
+
+  const res = await fetch("/api/integrations/accurate/disconnect", { method: "POST" });
+  if (!res.ok) {
+    const result = await res.json().catch(() => ({}));
+    showIntegrationsMessage(result.error || "Failed to disconnect Accurate", "error");
+    return;
+  }
+  showIntegrationsMessage("Accurate Online disconnected.", "success");
+  await loadIntegrations();
+}
+
+async function disconnectStore(id, name) {
+  if (!confirm(`Disconnect "${name}"? You'll need to re-authorize it to sync again.`)) return;
+
+  const res = await fetch(`/api/integrations/stores/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    const result = await res.json().catch(() => ({}));
+    showIntegrationsMessage(result.error || "Failed to disconnect store", "error");
+    return;
+  }
+  showIntegrationsMessage(`"${name}" disconnected.`, "success");
+  await loadIntegrations();
 }
 
 async function startIntegration(platform) {

@@ -480,6 +480,12 @@ a.stores-link:hover {
   color: #fff;
 }
 
+.platform-icon.accurate {
+  background: #0f766e;
+  color: #fff;
+  font-weight: 700;
+}
+
 .store-name {
   font-weight: 500;
 }
@@ -619,6 +625,25 @@ a.stores-link:hover {
 
 .platform-group button {
   margin-top: 0.5rem;
+}
+
+.accurate-connect-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.accurate-connect-form input {
+  flex: 1;
+  min-width: 160px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 1rem;
+}
+
+.accurate-connect-form button {
+  margin-top: 0;
 }
 
 /* ---- Import view ---- */

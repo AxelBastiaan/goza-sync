@@ -2,10 +2,39 @@ import crypto from "crypto";
 import axios, { AxiosResponse } from "axios";
 import { getEnv, updateEnv } from "../env";
 
-export const ACCURATE_APP_KEY = getEnv("ACCURATE_APP_KEY");
-export const ACCURATE_SIGNATURE_SECRET = getEnv("ACCURATE_SIGNATURE_SECRET");
-export const ACCURATE_API_TOKEN = getEnv("ACCURATE_API_TOKEN");
+export let ACCURATE_APP_KEY = getEnv("ACCURATE_APP_KEY");
+export let ACCURATE_SIGNATURE_SECRET = getEnv("ACCURATE_SIGNATURE_SECRET");
+export let ACCURATE_API_TOKEN = getEnv("ACCURATE_API_TOKEN");
 export let ACCURATE_HOST = getEnv("ACCURATE_HOST");
+
+export function isAccurateConnected(): boolean {
+  return Boolean(ACCURATE_APP_KEY && ACCURATE_SIGNATURE_SECRET && ACCURATE_API_TOKEN && ACCURATE_HOST);
+}
+
+// Saves the credentials a user pastes in from the Integrations UI, both to .env
+// (so they survive a restart) and to these live bindings (so the change takes
+// effect immediately, no restart needed) — same live-update pattern as ACCURATE_HOST
+// below. Does NOT touch ACCURATE_HOST: the caller re-derives it via getAccurateHost()
+// to confirm the credentials actually work before treating the connection as live.
+export function setAccurateCredentials(appKey: string, signatureSecret: string, apiToken: string): void {
+  ACCURATE_APP_KEY = appKey;
+  ACCURATE_SIGNATURE_SECRET = signatureSecret;
+  ACCURATE_API_TOKEN = apiToken;
+  updateEnv("ACCURATE_APP_KEY", appKey);
+  updateEnv("ACCURATE_SIGNATURE_SECRET", signatureSecret);
+  updateEnv("ACCURATE_API_TOKEN", apiToken);
+}
+
+export function clearAccurateCredentials(): void {
+  ACCURATE_APP_KEY = "";
+  ACCURATE_SIGNATURE_SECRET = "";
+  ACCURATE_API_TOKEN = "";
+  ACCURATE_HOST = "";
+  updateEnv("ACCURATE_APP_KEY", "");
+  updateEnv("ACCURATE_SIGNATURE_SECRET", "");
+  updateEnv("ACCURATE_API_TOKEN", "");
+  updateEnv("ACCURATE_HOST", "");
+}
 
 function formatTimestamp(date: Date): string {
   // dd/mm/yyyy hh:nn:ss — one of Accurate's accepted formats

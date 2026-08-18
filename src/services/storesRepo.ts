@@ -55,3 +55,8 @@ export function getStoreById(id: number): { id: number; platform: string; name: 
   if (!row || !row.credentials) return undefined;
   return { id: row.id, platform: row.platform, name: row.name, credentials: JSON.parse(row.credentials) };
 }
+
+export function deleteStore(id: number): boolean {
+  const result = db.prepare("DELETE FROM stores WHERE id = ?").run(id);
+  return result.changes > 0;
+}
