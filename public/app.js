@@ -1,3 +1,13 @@
+// ---- Auth: bounce to login on any 401 from the API ----
+const _fetch = window.fetch;
+window.fetch = async (...args) => {
+  const res = await _fetch(...args);
+  if (res.status === 401 && !String(args[0]).includes("/api/auth/login")) {
+    window.location.href = "/login.html";
+  }
+  return res;
+};
+
 // ---- Nav ----
 function switchView(view) {
   document.querySelectorAll(".nav-item").forEach((i) => i.classList.toggle("active", i.dataset.view === view));
@@ -441,6 +451,56 @@ liveModeToggle.addEventListener("change", async () => {
 });
 
 loadLiveMode();
+
+// ---- Users ----
+const usersList = document.getElementById("users-list");
+const addUserForm = document.getElementById("add-user-form");
+const newUsernameInput = document.getElementById("new-username-input");
+const newPasswordInput = document.getElementById("new-password-input");
+const addUserBtn = document.getElementById("add-user-btn");
+const usersMessage = document.getElementById("users-message");
+
+function showUsersMessage(text, type) {
+  usersMessage.textContent = text;
+  usersMessage.className = `message ${type}`;
+  usersMessage.hidden = false;
+  setTimeout(() => { usersMessage.hidden = true; }, 4000);
+}
+
+async function loadUsers() {
+  const res = await fetch("/api/auth/users");
+  const users = await res.json();
+  usersList.innerHTML = users.map((u) => `<div class="accordion-header"><span class="accordion-title">${u.username}</span></div>`).join("");
+}
+
+addUserForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  addUserBtn.disabled = true;
+  try {
+    const res = await fetch("/api/auth/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: newUsernameInput.value, password: newPasswordInput.value }),
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      showUsersMessage(body.error || "Could not add user", "error");
+      return;
+    }
+    addUserForm.reset();
+    showUsersMessage(`User "${body.username}" added`, "success");
+    loadUsers();
+  } finally {
+    addUserBtn.disabled = false;
+  }
+});
+
+loadUsers();
+
+document.getElementById("logout-btn").addEventListener("click", async () => {
+  await fetch("/api/auth/logout", { method: "POST" });
+  window.location.href = "/login.html";
+});
 
 // ---- Integrations ----
 const integrationsList = document.getElementById("integrations-list");

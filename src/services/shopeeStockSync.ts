@@ -3,6 +3,7 @@ import { callShopeeApi, ShopeeStoreCredentials } from "./shopeeClient";
 import { SkuMapping, getSkuMappings, getMappingsForAccurateSku } from "./skuMappings";
 import { AccurateItemData, fetchAccurateItemDataFor, SyncResult, SyncStatus, capDisplayQuantity } from "./stockSync";
 import { getShopeeStores, ShopeeStoreRow } from "./storesRepo";
+import { withRetry } from "./concurrency";
 
 export interface ShopeeSkuMatch {
   itemId: number;
@@ -111,17 +112,29 @@ export async function fetchShopeeSkuMap(credentials: ShopeeStoreCredentials): Pr
 }
 
 export async function pushShopeeQuantity(credentials: ShopeeStoreCredentials, itemId: number, modelId: number, quantity: number): Promise<void> {
-  const response = await callShopeeApi(
-    "POST",
-    "/api/v2/product/update_stock",
-    {},
-    { item_id: itemId, stock_list: [{ model_id: modelId, seller_stock: [{ stock: quantity }] }] },
-    credentials
-  );
+  // A bulk sync pushes dozens of these in quick succession — an earlier live run
+  // showed 16/221 fail with a generic "Update stock failed" error that then
+  // succeeded instantly on manual retry (confirmed: same item/model, no other
+  // change), consistent with transient rate-limiting rather than a real per-item
+  // problem. Retrying here absorbs that instead of surfacing a false failure.
+  await withRetry(async () => {
+    const response = await callShopeeApi(
+      "POST",
+      "/api/v2/product/update_stock",
+      {},
+      { item_id: itemId, stock_list: [{ model_id: modelId, seller_stock: [{ stock: quantity }] }] },
+      credentials
+    );
 
-  if (response.data?.error) {
-    throw new Error(response.data.message ?? response.data.error);
-  }
+    if (response.data?.error) {
+      throw new Error(response.data.message ?? response.data.error);
+    }
+
+    const failure = response.data?.response?.failure_list?.[0];
+    if (failure) {
+      throw new Error(failure.failed_reason ?? failure.failed_msg ?? "Update stock failed, please check failure_list for detailed reason");
+    }
+  });
 }
 
 function matchAndPush(

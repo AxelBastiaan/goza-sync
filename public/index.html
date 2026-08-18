@@ -13,6 +13,7 @@
     <div class="nav-item" data-view="integrations"><span class="nav-icon">🔌</span> Integrations</div>
     <div class="nav-item" data-view="import"><span class="nav-icon">⬇️</span> Import</div>
     <div class="nav-item" data-view="settings"><span class="nav-icon">⚙️</span> Settings</div>
+    <div class="nav-item" id="logout-btn" style="margin-top:auto;"><span class="nav-icon">🚪</span> Log out</div>
   </nav>
 
   <div class="content">
@@ -95,6 +96,19 @@
             <span class="slider"></span>
           </label>
         </div>
+
+        <hr />
+
+        <h2 style="font-size:1.1rem;">Users</h2>
+        <p class="subtitle">Anyone added here can log in and use this app.</p>
+        <div id="users-list"></div>
+
+        <form id="add-user-form" class="toolbar" style="margin-top:1rem;">
+          <input type="text" id="new-username-input" placeholder="Username" autocomplete="off" required />
+          <input type="password" id="new-password-input" placeholder="Password (min 8 chars)" autocomplete="new-password" required minlength="8" />
+          <button type="submit" id="add-user-btn">Add user</button>
+        </form>
+        <p id="users-message" class="message" hidden></p>
       </main>
     </section>
 

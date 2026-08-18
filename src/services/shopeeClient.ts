@@ -7,6 +7,31 @@ import { getEnv } from "../env";
 // they're passed into each call, since one app can have multiple shops authorized.
 export const PARTNER_ID = getEnv("SHOPEE_PARTNER_ID");
 export const PARTNER_KEY = getEnv("SHOPEE_PARTNER_KEY");
+// Separate key from PARTNER_KEY above — Shopee issues this specifically to sign
+// incoming push/webhook payloads, distinct from the key that signs our outgoing
+// API calls. Configured in Partner Center under Live Push Setting.
+const PUSH_PARTNER_KEY = getEnv("SHOPEE_PUSH_PARTNER_KEY");
+// Must exactly match what's registered as the Live Call Back URL in Partner
+// Center — Shopee signs against that literal string, not whatever the request
+// happens to report (which can differ if proxy headers aren't trusted).
+const WEBHOOK_URL = getEnv("SHOPEE_WEBHOOK_URL");
+
+// Shopee's documented push signature scheme: HMAC-SHA256(url + raw_body, push_partner_key),
+// hex digest, sent as the "Authorization" header. Mirrors verifyWebhookSignature() in
+// tiktokClient.ts but with a different base-string shape (url+body vs appkey+body).
+export function verifyShopeeWebhookSignature(rawBody: Buffer | undefined, authorizationHeader: string | undefined): boolean {
+  if (!rawBody || !authorizationHeader || !PUSH_PARTNER_KEY || !WEBHOOK_URL) {
+    return false;
+  }
+
+  const base = WEBHOOK_URL + rawBody.toString("utf8");
+  const expected = crypto.createHmac("sha256", PUSH_PARTNER_KEY).update(base, "utf8").digest("hex");
+
+  const expectedBuffer = Buffer.from(expected, "utf8");
+  const receivedBuffer = Buffer.from(authorizationHeader, "utf8");
+
+  return expectedBuffer.length === receivedBuffer.length && crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
+}
 
 export interface ShopeeStoreCredentials {
   accessToken: string;

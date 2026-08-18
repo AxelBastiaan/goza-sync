@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>goza-sync — Log in</title>
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    body { align-items: center; justify-content: center; }
+    .login-card { width: 320px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 2rem; }
+    .login-card h1 { font-size: 1.1rem; margin: 0 0 1.25rem; }
+    .login-card label { display: block; font-size: 0.85rem; margin-bottom: 0.3rem; color: #4b5563; }
+    .login-card input { width: 100%; padding: 0.5rem 0.6rem; margin-bottom: 1rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.95rem; }
+    .login-card button { width: 100%; }
+  </style>
+</head>
+<body>
+  <form class="login-card" id="login-form">
+    <h1>goza-sync</h1>
+    <label for="username">Username</label>
+    <input type="text" id="username" name="username" autocomplete="username" required />
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" required />
+    <p id="login-message" class="message error" hidden></p>
+    <button type="submit" id="login-btn">Log in</button>
+  </form>
+
+  <script>
+    const form = document.getElementById("login-form");
+    const messageEl = document.getElementById("login-message");
+    const btn = document.getElementById("login-btn");
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      messageEl.hidden = true;
+      btn.disabled = true;
+      btn.textContent = "Logging in…";
+
+      try {
+        const res = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: document.getElementById("username").value,
+            password: document.getElementById("password").value,
+          }),
+        });
+
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          messageEl.textContent = body.error || "Login failed";
+          messageEl.hidden = false;
+          return;
+        }
+
+        window.location.href = "/";
+      } catch {
+        messageEl.textContent = "Could not reach the server";
+        messageEl.hidden = false;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Log in";
+      }
+    });
+  </script>
+</body>
+</html>

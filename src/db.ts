@@ -104,11 +104,37 @@ db.exec(`
   )
 `);
 
+// Same shape/lifecycle as tiktok_orders, kept as a separate table (rather than a
+// shared one keyed loosely by order id) since the two platforms' order-id formats
+// aren't guaranteed disjoint and the semantics are platform-specific enough to want
+// clean separation.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS shopee_orders (
+    order_sn TEXT PRIMARY KEY,
+    sales_order_id INTEGER,
+    delivery_order_id INTEGER,
+    sales_invoice_id INTEGER,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )
+`);
+
 // Generic key-value store for app-wide toggles, e.g. "live_mode".
 db.exec(`
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+  )
+`);
+
+// password_hash stores "salt:hash" (both hex) — scrypt, not bcrypt, to avoid
+// pulling in a native dependency beyond the one better-sqlite3 already requires.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
   )
 `);
 

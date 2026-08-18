@@ -12,10 +12,22 @@ import { OrderLineItem } from "./tiktokOrders";
 // shape itself is unconfirmed until the first live save.do call succeeds or fails.
 // Treat the first real use of each function as a calibration test, not a sure thing.
 
-function getTikTokCustomerId(): number {
+export function getTikTokCustomerId(): number {
   const id = getEnv("ACCURATE_TIKTOK_CUSTOMER_ID");
   if (!id) {
     throw new Error("ACCURATE_TIKTOK_CUSTOMER_ID is not set in .env");
+  }
+  return Number(id);
+}
+
+// Separate Accurate customer record from TikTok's — orders from different
+// marketplaces must not get attributed to the same customer, or revenue reporting
+// per channel becomes meaningless. Confirmed against the real customer list
+// (id 87450, "Shopee Goza Indonesia") rather than guessed.
+export function getShopeeCustomerId(): number {
+  const id = getEnv("ACCURATE_SHOPEE_CUSTOMER_ID");
+  if (!id) {
+    throw new Error("ACCURATE_SHOPEE_CUSTOMER_ID is not set in .env");
   }
   return Number(id);
 }
@@ -113,7 +125,12 @@ export interface CreateSalesOrderResult {
 // alongside the new SO id — the caller (tiktokWebhook.ts) needs these exact
 // quantities to reserve stock immediately, without recomputing/re-fetching Accurate
 // item data a second time.
-export async function createSalesOrder(orderId: string, lineItems: OrderLineItem[], transDate: Date = new Date()): Promise<CreateSalesOrderResult> {
+export async function createSalesOrder(
+  orderId: string,
+  lineItems: OrderLineItem[],
+  customerId: number = getTikTokCustomerId(),
+  transDate: Date = new Date()
+): Promise<CreateSalesOrderResult> {
   const detailItem = await toAccurateDetailItems(lineItems);
 
   if (detailItem.length === 0) {
@@ -127,7 +144,7 @@ export async function createSalesOrder(orderId: string, lineItems: OrderLineItem
     "sales-order/save.do",
     {},
     {
-      customerId: getTikTokCustomerId(),
+      customerId,
       transDate: formatAccurateDate(transDate),
       warehouseId: Number(warehouseId),
       // Prefixed, not the raw order id — the Sales Invoice claims the raw id as its
@@ -152,7 +169,12 @@ export async function createSalesOrder(orderId: string, lineItems: OrderLineItem
   return { salesOrderId: Number(salesOrderId), detailItems: detailItem };
 }
 
-export async function createDeliveryOrder(salesOrderId: number, lineItems: OrderLineItem[], transDate: Date = new Date()): Promise<number> {
+export async function createDeliveryOrder(
+  salesOrderId: number,
+  lineItems: OrderLineItem[],
+  customerId: number = getTikTokCustomerId(),
+  transDate: Date = new Date()
+): Promise<number> {
   const baseDetailItems = await toAccurateDetailItems(lineItems);
   const soDetailIds = await fetchSalesOrderDetailIds(salesOrderId);
 
@@ -175,7 +197,7 @@ export async function createDeliveryOrder(salesOrderId: number, lineItems: Order
     "delivery-order/save.do",
     {},
     {
-      customerId: getTikTokCustomerId(),
+      customerId,
       transDate: formatAccurateDate(transDate),
       warehouseId: Number(warehouseId),
       salesOrderId,
@@ -201,6 +223,7 @@ export async function createSalesInvoice(
   salesOrderId: number,
   deliveryOrderId: number,
   lineItems: OrderLineItem[],
+  customerId: number = getTikTokCustomerId(),
   transDate: Date = new Date()
 ): Promise<number> {
   const baseDetailItems = await toAccurateDetailItems(lineItems);
@@ -227,7 +250,7 @@ export async function createSalesInvoice(
     "sales-invoice/save.do",
     {},
     {
-      customerId: getTikTokCustomerId(),
+      customerId,
       number: orderId,
       transDate: formatAccurateDate(transDate),
       warehouseId: Number(warehouseId),

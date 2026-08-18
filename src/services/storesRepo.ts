@@ -43,6 +43,13 @@ export function getTikTokStoreByShopId(shopId: string): TikTokStoreRow | undefin
   return row ? { id: row.id, name: row.name, credentials: JSON.parse(row.credentials) } : undefined;
 }
 
+export function getShopeeStoreByShopId(shopId: string): ShopeeStoreRow | undefined {
+  const row = db
+    .prepare("SELECT id, name, credentials FROM stores WHERE platform = 'shopee' AND platform_shop_id = ? AND credentials IS NOT NULL")
+    .get(shopId) as { id: number; name: string; credentials: string } | undefined;
+  return row ? { id: row.id, name: row.name, credentials: JSON.parse(row.credentials) } : undefined;
+}
+
 export function getStoreById(id: number): { id: number; platform: string; name: string; credentials: any } | undefined {
   const row = db.prepare("SELECT * FROM stores WHERE id = ?").get(id) as RawStoreRow | undefined;
   if (!row || !row.credentials) return undefined;
