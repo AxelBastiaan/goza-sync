@@ -1,20 +1,70 @@
 import { Router, Request, Response } from "express";
 import { db } from "../db";
-import { getAccurateItemByNo, fetchAccurateItemDataFor } from "../services/stockSync";
+import { getAccurateItemByNo, fetchAccurateItemDataFor, AccurateItemData } from "../services/stockSync";
 import { getDistinctAccurateSkus, getMappingsForAccurateSku } from "../services/skuMappings";
 
 const router = Router();
 
+// Filling in stock means one rate-limited Accurate call per mapped SKU — with
+// several hundred mappings that is minutes end to end, so a page refresh must
+// not redo it from scratch. The ↻ button sends `?fresh=1` to force a live read.
+const STOCK_CACHE_TTL_MS = 5 * 60 * 1000;
+
+let stockCache: { skus: Set<string>; data: Map<string, AccurateItemData>; fetchedAt: number } | null = null;
+let stockInFlight: Promise<Map<string, AccurateItemData>> | null = null;
+
+function cachedItemData(skus: string[], fresh: boolean): Promise<Map<string, AccurateItemData>> {
+  // A SKU missing from the cached run has no entry either way (not found in
+  // Accurate looks the same as never asked for), so the cache is only usable
+  // when every SKU we need was part of the run that built it.
+  const usable =
+    stockCache !== null &&
+    Date.now() - stockCache.fetchedAt < STOCK_CACHE_TTL_MS &&
+    skus.every((sku) => stockCache!.skus.has(sku));
+
+  if (!fresh && usable) {
+    return Promise.resolve(stockCache!.data);
+  }
+  // Coalesce concurrent callers onto one run rather than doubling the load.
+  if (stockInFlight) {
+    return stockInFlight;
+  }
+
+  stockInFlight = fetchAccurateItemDataFor(skus)
+    .then((data) => {
+      stockCache = { skus: new Set(skus), data, fetchedAt: Date.now() };
+      return data;
+    })
+    .finally(() => {
+      stockInFlight = null;
+    });
+  return stockInFlight;
+}
+
+// A newly added SKU is already looked up live by POST below, so fold it into the
+// cache instead of invalidating (which would cost another full re-read).
+function primeStockCache(accurateSku: string, item: AccurateItemData): void {
+  if (!stockCache) return;
+  stockCache.skus.add(accurateSku);
+  stockCache.data.set(accurateSku, item);
+}
+
 // Whole-list endpoint: one call gets everything needed to render the accordion
 // list AND seed the settings modal's unit dropdown (no separate per-item fetch).
-router.get("/", async (_req: Request, res: Response) => {
+// `?stock=skip` answers straight from the local DB without touching Accurate.
+// The list page loads that first so the mappings render instantly, then asks
+// again without the flag for the (much slower) live stock figures.
+router.get("/", async (req: Request, res: Response) => {
   const accurateSkus = getDistinctAccurateSkus();
+  const skipStock = req.query.stock === "skip";
 
-  let accurateItemData;
-  try {
-    accurateItemData = await fetchAccurateItemDataFor(accurateSkus);
-  } catch (err: any) {
-    return res.status(500).json({ error: err?.message ?? "Failed to fetch Accurate item data" });
+  let accurateItemData = new Map<string, AccurateItemData>();
+  if (!skipStock) {
+    try {
+      accurateItemData = await cachedItemData(accurateSkus, req.query.fresh === "1");
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message ?? "Failed to fetch Accurate item data" });
+    }
   }
 
   const result = accurateSkus.map((accurateSku) => {
@@ -34,6 +84,7 @@ router.get("/", async (_req: Request, res: Response) => {
 
     return {
       accurateSku,
+      stockKnown: !skipStock,
       stock: item?.quantity ?? null,
       units: item?.units ?? null,
       mappings,
@@ -62,6 +113,8 @@ router.post("/", async (req: Request, res: Response) => {
   if (!item) {
     return res.status(400).json({ error: `Accurate SKU "${accurateSku}" not found` });
   }
+
+  primeStockCache(accurateSku, item);
 
   try {
     db.prepare("INSERT INTO sku_mappings (accurate_sku, unit_level, marketplace_sku, is_default) VALUES (?, 1, ?, 1)").run(

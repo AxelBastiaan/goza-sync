@@ -71,16 +71,28 @@ async function fetchDeliveryOrderDetailRows(deliveryOrderId: number): Promise<{ 
     .map((item) => ({ id: item.id, salesOrderDetailId: item.salesOrderDetailId }));
 }
 
-// Converts TikTok order lines into Accurate detail lines, applying each line's
-// mapped unit ratio: quantity is multiplied by the ratio (a "1 PAK" order becomes
-// "10 PCS" in Accurate's base unit) and unitPrice is divided by the same ratio, so
-// the total transaction value is preserved exactly (baseQty * basePrice === the
-// original TikTok qty * price). Lines with no mapping, or whose mapped Accurate
-// item doesn't have that unit level configured, are skipped (logged, not thrown).
+// Converts marketplace order lines into Accurate detail lines, applying each
+// line's mapped unit ratio: quantity is multiplied by the ratio (a "1 PAK" order
+// becomes "10 PCS" in Accurate's base unit). unitPrice is set to the marketplace's
+// own pre-promotion listed price (line.originalPrice) — this is the "before
+// discount" gross value the user asked to show on these documents, sourced from
+// the actual listing's promotion rather than Accurate's own (potentially stale)
+// item price. itemCashDiscount then carries the gap between that gross value and
+// what the marketplace actually charged (confirmed live: itemCashDiscount is a
+// flat amount subtracted from the line total, e.g. qty 10 * unitPrice 1135 with
+// itemCashDiscount 500 -> totalPrice 10850). For TikTok this reduces to exactly
+// the seller-funded discount (original_price - (original_price - seller_discount)
+// = seller_discount), which is the cleanest possible outcome. Can come out
+// negative if a listing's "original" price on file is below what was actually
+// charged — the field accepts that the same way, since it's a plain subtraction;
+// the total transaction value is preserved exactly regardless of direction.
+// Lines with no mapping, or whose mapped Accurate item doesn't have that unit
+// level configured, are skipped (logged, not thrown).
 export interface AccurateDetailItem {
   itemNo: string;
   quantity: number;
   unitPrice: number;
+  itemCashDiscount: number;
 }
 
 async function toAccurateDetailItems(lineItems: OrderLineItem[]): Promise<AccurateDetailItem[]> {
@@ -90,7 +102,7 @@ async function toAccurateDetailItems(lineItems: OrderLineItem[]): Promise<Accura
     .filter((sku): sku is string => Boolean(sku));
   const accurateItemData = await fetchAccurateItemDataFor(accurateSkus);
 
-  const details: { itemNo: string; quantity: number; unitPrice: number }[] = [];
+  const details: AccurateDetailItem[] = [];
 
   for (const { line, mapping } of mappings) {
     if (!mapping) {
@@ -98,7 +110,8 @@ async function toAccurateDetailItems(lineItems: OrderLineItem[]): Promise<Accura
       continue;
     }
 
-    const unit = accurateItemData.get(mapping.accurateSku)?.units[mapping.unitLevel];
+    const itemData = accurateItemData.get(mapping.accurateSku);
+    const unit = itemData?.units[mapping.unitLevel];
     if (!unit) {
       console.warn(
         `[accurateSalesFlow] Accurate item ${mapping.accurateSku} has no unit level ${mapping.unitLevel} configured, skipping line for ${line.sellerSku}`
@@ -106,10 +119,19 @@ async function toAccurateDetailItems(lineItems: OrderLineItem[]): Promise<Accura
       continue;
     }
 
+    const quantity = line.quantity * unit.ratio;
+    // Fall back to Accurate's own item price if the marketplace didn't supply an
+    // original/pre-promotion price (would otherwise zero out the gross value and
+    // report the entire sale as a nonsensical negative discount).
+    const grossUnitPrice = line.originalPrice || itemData!.unitPrice || line.unitPrice;
+    const grossTotal = grossUnitPrice * line.quantity;
+    const actualTotal = line.unitPrice * line.quantity;
+
     details.push({
       itemNo: mapping.accurateSku,
-      quantity: line.quantity * unit.ratio,
-      unitPrice: line.unitPrice / unit.ratio,
+      quantity,
+      unitPrice: grossUnitPrice / unit.ratio,
+      itemCashDiscount: grossTotal - actualTotal,
     });
   }
 

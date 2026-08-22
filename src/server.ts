@@ -20,6 +20,7 @@ import integrationsRouter from "./routes/integrations";
 import importRouter from "./routes/import";
 import { renewAccurateWebhook } from "./services/accurateWebhookRenewal";
 import { renewAllShopeeStores } from "./services/shopeeAuth";
+import { renewAllTikTokStores } from "./services/tiktokAuth";
 
 const app = express();
 app.use(
@@ -104,3 +105,13 @@ renewAllShopeeStores().catch((err) => console.error("[shopeeTokenRenewal] initia
 setInterval(() => {
   renewAllShopeeStores().catch((err) => console.error("[shopeeTokenRenewal] renew failed:", err.message));
 }, SHOPEE_TOKEN_RENEWAL_INTERVAL_MS);
+
+// TikTok access tokens last ~7 days; refresh daily so a single failed attempt
+// still leaves days of headroom before the token actually lapses. Without this,
+// TikTok sync silently dies the first time a token ages out (observed live).
+const TIKTOK_TOKEN_RENEWAL_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+renewAllTikTokStores().catch((err) => console.error("[tiktokTokenRenewal] initial renew failed:", err.message));
+setInterval(() => {
+  renewAllTikTokStores().catch((err) => console.error("[tiktokTokenRenewal] renew failed:", err.message));
+}, TIKTOK_TOKEN_RENEWAL_INTERVAL_MS);

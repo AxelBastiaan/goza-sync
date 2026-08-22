@@ -12,6 +12,8 @@ window.fetch = async (...args) => {
 function switchView(view) {
   document.querySelectorAll(".nav-item").forEach((i) => i.classList.toggle("active", i.dataset.view === view));
   document.querySelectorAll(".view").forEach((v) => { v.hidden = v.id !== `view-${view}`; });
+  // Re-read the store list on entry so a store connected since page load shows up.
+  if (view === "import") loadImportStores();
 }
 document.querySelectorAll(".nav-item").forEach((item) => {
   item.addEventListener("click", () => switchView(item.dataset.view));
@@ -42,7 +44,8 @@ function showMessage(text, type) {
 
 function unitLabel(entry, unitLevel) {
   const unit = entry.units && entry.units[unitLevel];
-  return unit ? `${unit.name} (${unit.ratio}:1)` : `level ${unitLevel} (not found)`;
+  if (unit) return `${unit.name} (${unit.ratio}:1)`;
+  return entry.stockKnown ? `level ${unitLevel} (not found)` : `level ${unitLevel}`;
 }
 
 function render() {
@@ -71,7 +74,14 @@ function render() {
 
     const stock = document.createElement("span");
     stock.className = "accordion-stock";
-    stock.textContent = entry.stock !== null ? `${entry.stock.toLocaleString()} PCS` : "not found in Accurate";
+    if (entry.stock !== null) {
+      stock.textContent = `${entry.stock.toLocaleString()} PCS`;
+    } else if (entry.stockKnown) {
+      stock.textContent = "not found in Accurate";
+    } else {
+      stock.className += " muted";
+      stock.textContent = "loading stock…";
+    }
 
     const gearBtn = document.createElement("button");
     gearBtn.className = "icon-btn";
@@ -117,7 +127,9 @@ function render() {
       const unitCell = document.createElement("td");
       unitCell.textContent = unitLabel(entry, m.unitLevel);
       const stockCell = document.createElement("td");
-      stockCell.textContent = m.stock !== null ? m.stock : "—";
+      if (m.stock !== null) stockCell.textContent = m.stock;
+      else if (entry.stockKnown) stockCell.textContent = "—";
+      else stockCell.innerHTML = '<span class="muted">…</span>';
 
       row.append(skuCell, storesCell, unitCell, stockCell);
       tbody.appendChild(row);
@@ -130,8 +142,58 @@ function render() {
   }
 }
 
-async function loadAccurateSkus() {
-  const res = await fetch("/api/accurate-skus");
+// Carries stock/unit figures we already have over to a freshly-fetched list, so
+// phase 1 below never blanks out numbers that are still perfectly good.
+function reuseKnownStock(fresh) {
+  const previous = new Map(data.map((e) => [e.accurateSku, e]));
+  for (const entry of fresh) {
+    const old = previous.get(entry.accurateSku);
+    if (!old || !old.stockKnown) continue;
+
+    entry.stockKnown = true;
+    entry.stock = old.stock;
+    entry.units = old.units;
+    for (const m of entry.mappings) {
+      const oldMapping = old.mappings.find((x) => x.id === m.id && x.unitLevel === m.unitLevel);
+      if (oldMapping) {
+        m.stock = oldMapping.stock;
+        m.unitName = oldMapping.unitName;
+        m.ratio = oldMapping.ratio;
+      }
+    }
+  }
+  return fresh;
+}
+
+// Only the newest load may write to `data` — an older, slower phase 2 landing
+// late would otherwise clobber a newer list (e.g. right after a delete).
+let loadToken = 0;
+
+// Two phases on purpose: the mappings themselves come from the local DB and are
+// instant, while the stock figures need one rate-limited Accurate call per SKU
+// and can take many seconds. Rendering phase 1 first keeps the list on screen
+// instead of blanking it out on every refresh.
+async function loadAccurateSkus({ fresh = false } = {}) {
+  const token = ++loadToken;
+
+  try {
+    const quickRes = await fetch("/api/accurate-skus?stock=skip");
+    if (token !== loadToken) return;
+    if (quickRes.ok) {
+      data = reuseKnownStock(await quickRes.json());
+      render();
+    }
+  } catch (err) {
+    // Non-fatal: the full request below reports any real connectivity problem.
+  }
+
+  const res = await fetch(`/api/accurate-skus${fresh ? "?fresh=1" : ""}`);
+  if (token !== loadToken) return;
+  if (!res.ok) {
+    const result = await res.json().catch(() => ({}));
+    showMessage(result.error || "Failed to load stock from Accurate", "error");
+    return;
+  }
   data = await res.json();
   render();
 }
@@ -177,7 +239,7 @@ addForm.addEventListener("submit", async (e) => {
 refreshBtn.addEventListener("click", async () => {
   refreshBtn.disabled = true;
   try {
-    await loadAccurateSkus();
+    await loadAccurateSkus({ fresh: true });
     showMessage("Stock refreshed from Accurate", "success");
   } catch (err) {
     showMessage("Failed to refresh", "error");
@@ -220,6 +282,14 @@ function renderModal() {
     row.appendChild(input);
 
     const select = document.createElement("select");
+    if (!entry.units) {
+      // Units come from Accurate; until that lands there is nothing to pick from.
+      const opt = document.createElement("option");
+      opt.value = String(m.unitLevel);
+      opt.textContent = entry.stockKnown ? `level ${m.unitLevel} (not found in Accurate)` : "loading units…";
+      select.appendChild(opt);
+      select.disabled = true;
+    }
     for (const [level, unit] of Object.entries(entry.units || {})) {
       const opt = document.createElement("option");
       opt.value = level;
@@ -275,7 +345,13 @@ addRowBtn.addEventListener("click", async () => {
   const usedLevels = new Set(entry.mappings.map((m) => m.unitLevel));
   const availableLevels = Object.keys(entry.units || {}).map(Number);
   const unitLevel = availableLevels.find((l) => !usedLevels.has(l)) ?? availableLevels[0];
-  if (!unitLevel) return;
+  if (!unitLevel) {
+    showMessage(
+      entry.stockKnown ? `No units available for "${modalSku}" in Accurate` : "Still loading units from Accurate — try again in a moment",
+      "error"
+    );
+    return;
+  }
 
   const res = await fetch(`/api/accurate-skus/${encodeURIComponent(modalSku)}/mappings`, {
     method: "POST",
@@ -749,19 +825,32 @@ function renderImportSummary(result) {
 }
 
 async function loadImportStores() {
-  const res = await fetch("/api/integrations");
-  const platforms = await res.json();
+  let platforms;
+  try {
+    const res = await fetch("/api/integrations");
+    if (!res.ok) throw new Error("request failed");
+    platforms = await res.json();
+  } catch (err) {
+    importStorePicker.innerHTML = '<option value="">Could not load stores</option>';
+    return;
+  }
 
   const options = [];
   for (const p of platforms) {
-    for (const s of p.stores) {
+    // Accurate is a single global connection, not a marketplace with stores, so
+    // it comes back without a `stores` array — importing never targets it either.
+    for (const s of p.stores || []) {
       options.push({ id: s.id, label: `${s.name} (${p.name})` });
     }
   }
 
+  const previous = importStorePicker.value;
   importStorePicker.innerHTML = options.length === 0
     ? '<option value="">No stores connected yet</option>'
     : options.map((o) => `<option value="${o.id}">${o.label}</option>`).join("");
+  if (previous && options.some((o) => String(o.id) === previous)) {
+    importStorePicker.value = previous;
+  }
 }
 
 function renderImportResults() {

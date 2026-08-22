@@ -36,6 +36,10 @@ export interface AccurateItemData {
   // is saved.
   quantity: number; // base unit1 quantity, available-to-sell basis
   units: { 1: UnitInfo; 2?: UnitInfo; 3?: UnitInfo };
+  // Accurate's own listed base-unit price ("harga") — used to compute the
+  // pre-discount gross value of a sale, independent of what the marketplace
+  // actually charged.
+  unitPrice: number;
 }
 
 export interface TikTokSkuMatch {
@@ -63,7 +67,7 @@ export function capDisplayQuantity(quantity: number): number {
 // fetched directly in ~0.5s instead of sweeping the entire paginated catalog.
 export async function getAccurateItemByNo(itemNo: string): Promise<AccurateItemData | undefined> {
   const response = await callAccurateApi("GET", "item/list.do", {
-    fields: "id,name,no,availableToSell,unit1,unit2,unit3,ratio2,ratio3",
+    fields: "id,name,no,availableToSell,unit1,unit2,unit3,ratio2,ratio3,unitPrice",
     "filter.no.op": "EQUAL",
     "filter.no.val": itemNo,
   });
@@ -80,6 +84,7 @@ export async function getAccurateItemByNo(itemNo: string): Promise<AccurateItemD
     unit3?: { name: string };
     ratio2?: number;
     ratio3?: number;
+    unitPrice?: number;
   }[];
 
   const item = items.find((i) => i.no === itemNo);
@@ -97,7 +102,7 @@ export async function getAccurateItemByNo(itemNo: string): Promise<AccurateItemD
     units[3] = { name: item.unit3.name, ratio: item.ratio3 };
   }
 
-  return { quantity: item.availableToSell ?? 0, units };
+  return { quantity: item.availableToSell ?? 0, units, unitPrice: item.unitPrice ?? 0 };
 }
 
 // Fetches only the specific Accurate SKUs given (deduped), each via a targeted

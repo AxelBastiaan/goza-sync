@@ -42,6 +42,7 @@ export async function getShopeeOrderLineItems(orderSn: string, credentials: Shop
     const sellerSku = item.model_sku || item.item_sku;
     const quantity = Number(item.model_quantity_purchased ?? 1);
     const unitPrice = Number(item.model_discounted_price ?? item.model_original_price ?? 0);
+    const originalPrice = Number(item.model_original_price ?? unitPrice);
 
     if (!sellerSku) {
       console.warn(`[shopeeOrders] item missing sku for order ${orderSn}:`, JSON.stringify(item));
@@ -52,7 +53,7 @@ export async function getShopeeOrderLineItems(orderSn: string, credentials: Shop
       console.warn(`[shopeeOrders] could not resolve a unit price for SKU ${sellerSku} on order ${orderSn}:`, JSON.stringify(item));
     }
 
-    results.push({ sellerSku, quantity, unitPrice });
+    results.push({ sellerSku, quantity, unitPrice, originalPrice });
   }
 
   return results;

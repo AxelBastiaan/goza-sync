@@ -4,6 +4,11 @@ export interface OrderLineItem {
   sellerSku: string;
   quantity: number;
   unitPrice: number;
+  // The marketplace's own pre-promotion listed price for this line, before any
+  // discount was applied — used as the "before discount" gross reference on the
+  // Accurate documents (see accurateSalesFlow.ts), instead of Accurate's own
+  // (potentially stale) item price.
+  originalPrice: number;
 }
 
 // Takes a specific store's credentials — an order belongs to exactly one shop, and
@@ -45,6 +50,7 @@ export async function getOrderLineItems(orderId: string, credentials: TikTokStor
     // using sale_price here was silently underinvoicing every order by exactly its
     // platform_discount amount.
     const unitPrice = Number(line.original_price ?? 0) - Number(line.seller_discount ?? 0);
+    const originalPrice = Number(line.original_price ?? 0);
 
     if (!sellerSku) {
       console.warn(`[tiktokOrders] line item missing seller_sku for order ${orderId}:`, JSON.stringify(line));
@@ -55,7 +61,7 @@ export async function getOrderLineItems(orderId: string, credentials: TikTokStor
       console.warn(`[tiktokOrders] could not resolve a unit price for SKU ${sellerSku} on order ${orderId}:`, JSON.stringify(line));
     }
 
-    results.push({ sellerSku, quantity, unitPrice });
+    results.push({ sellerSku, quantity, unitPrice, originalPrice });
   }
 
   return results;

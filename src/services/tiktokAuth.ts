@@ -38,6 +38,64 @@ export async function exchangeTikTokToken(authCode: string): Promise<TikTokToken
   return { accessToken: response.data.data.access_token, refreshToken: response.data.data.refresh_token };
 }
 
+// TikTok access tokens expire (observed live: sync failed with "Expired
+// credentials ... 'access_token' ... has expired"). Every store row already
+// carries a refresh_token from the original authorization, but nothing was ever
+// using it — Shopee had renewAllShopeeStores() on a timer and TikTok had no
+// equivalent, so TikTok sync silently died once the first token aged out.
+export async function refreshTikTokToken(refreshToken: string): Promise<TikTokTokenPair> {
+  const response = await axios.get("https://auth.tiktok-shops.com/api/v2/token/refresh", {
+    params: {
+      app_key: APP_KEY,
+      app_secret: APP_SECRET,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+    },
+    validateStatus: () => true,
+  });
+
+  if (response.data?.code !== 0) {
+    throw new Error(`TikTok token refresh failed: ${response.data?.message ?? response.status}`);
+  }
+
+  return { accessToken: response.data.data.access_token, refreshToken: response.data.data.refresh_token };
+}
+
+// Renews every connected TikTok store's access token in place, preserving each
+// store's shopCipher (which is per-shop and unaffected by the token rotation).
+export async function renewAllTikTokStores(): Promise<void> {
+  if (!APP_KEY || !APP_SECRET) {
+    return;
+  }
+
+  const stores = db.prepare("SELECT id, name, credentials FROM stores WHERE platform = 'tiktok' AND credentials IS NOT NULL").all() as {
+    id: number;
+    name: string;
+    credentials: string;
+  }[];
+
+  for (const store of stores) {
+    const creds = JSON.parse(store.credentials) as { accessToken: string; refreshToken: string; shopCipher: string };
+    if (!creds.refreshToken) {
+      console.error(`[tiktokTokenRenewal] store ${store.id} (${store.name}) has no refresh token — needs re-authorization`);
+      continue;
+    }
+
+    try {
+      const tokens = await refreshTikTokToken(creds.refreshToken);
+      const updated = JSON.stringify({
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        shopCipher: creds.shopCipher,
+      });
+      db.prepare("UPDATE stores SET credentials = ? WHERE id = ?").run(updated, store.id);
+      console.log(`[tiktokTokenRenewal] store ${store.id} (${store.name}) renewed`);
+    } catch (err: any) {
+      console.error(`[tiktokTokenRenewal] store ${store.id} (${store.name}) failed:`, err?.message ?? err);
+    }
+  }
+}
+
 interface TikTokShop {
   shopId: string;
   cipher: string;
