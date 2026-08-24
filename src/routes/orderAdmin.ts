@@ -4,7 +4,7 @@ import { getOrderLineItems, getOrderStatus } from "../services/tiktokOrders";
 import { createDeliveryOrder, createSalesInvoice } from "../services/accurateSalesFlow";
 import { getTikTokStores, getShopeeStores } from "../services/storesRepo";
 import { callAccurateApi } from "../services/accurateClient";
-import { callShopeeApi } from "../services/shopeeClient";
+import { callShopeeApi, WEBHOOK_URL as SHOPEE_WEBHOOK_URL } from "../services/shopeeClient";
 
 const router = Router();
 
@@ -233,6 +233,24 @@ router.get("/shopee/recent-orders", async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     res.status(502).json({ error: err?.message ?? "Failed to reach Shopee" });
+  }
+});
+
+// Read-only: compares our own configured SHOPEE_WEBHOOK_URL against what Shopee's
+// Partner API actually has on file as the Live Push callback URL/event
+// subscription for this app. shopee_orders having zero rows despite 93+ real
+// orders existing (confirmed via /shopee/recent-orders) means events aren't
+// reaching us at all — this settles whether that's because Shopee was never
+// told to call us (URL mismatch/no subscription) versus a bug on our side.
+router.get("/shopee/webhook-config", async (_req: Request, res: Response) => {
+  try {
+    const response = await callShopeeApi("GET", "/api/v2/push/get_push_config", {});
+    res.json({
+      ourConfiguredWebhookUrl: SHOPEE_WEBHOOK_URL || null,
+      shopeePushConfig: response.data,
+    });
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message ?? "Failed to reach Shopee", ourConfiguredWebhookUrl: SHOPEE_WEBHOOK_URL || null });
   }
 });
 

@@ -14,7 +14,7 @@ const PUSH_PARTNER_KEY = getEnv("SHOPEE_PUSH_PARTNER_KEY");
 // Must exactly match what's registered as the Live Call Back URL in Partner
 // Center — Shopee signs against that literal string, not whatever the request
 // happens to report (which can differ if proxy headers aren't trusted).
-const WEBHOOK_URL = getEnv("SHOPEE_WEBHOOK_URL");
+export const WEBHOOK_URL = getEnv("SHOPEE_WEBHOOK_URL");
 
 // Shopee's documented push signature scheme: HMAC-SHA256(url + raw_body, push_partner_key),
 // hex digest, sent as the "Authorization" header. Mirrors verifyWebhookSignature() in
