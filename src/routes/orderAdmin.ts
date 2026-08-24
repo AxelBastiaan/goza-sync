@@ -129,7 +129,14 @@ router.post("/tiktok/bulk-delete-so-do", async (req: Request, res: Response) => 
     return res.status(400).json({ error: "orderIds must be a non-empty array" });
   }
 
-  const results: { orderId: string; deleted?: { salesOrderId: number; deliveryOrderId: number | null }; error?: string }[] = [];
+  // Accurate returns this exact rejection when the target id doesn't exist
+  // (confirmed live) -- some of these SOs were apparently already cleaned up
+  // directly in Accurate, presumably by whoever did the manual bookkeeping for
+  // this period. That's the desired end state already achieved, not a failure.
+  const isAlreadyGone = (data: any): boolean =>
+    Array.isArray(data?.d) && data.d.some((m: unknown) => typeof m === "string" && m.includes("tidak ditemukan atau sudah dihapus"));
+
+  const results: { orderId: string; deleted?: { salesOrderId: number; deliveryOrderId: number | null }; alreadyGone?: boolean; error?: string }[] = [];
 
   for (const orderId of orderIds) {
     try {
@@ -143,21 +150,31 @@ router.post("/tiktok/bulk-delete-so-do", async (req: Request, res: Response) => 
         continue;
       }
 
+      let alreadyGone = false;
+
       if (row.delivery_order_id !== null) {
         const deleteDoResponse = await callAccurateApi("POST", "delivery-order/delete.do", { id: row.delivery_order_id });
         if (!deleteDoResponse.data?.s) {
-          throw new Error(`delivery-order/delete.do failed for DO ${row.delivery_order_id}: ${JSON.stringify(deleteDoResponse.data?.d ?? deleteDoResponse.status)}`);
+          if (isAlreadyGone(deleteDoResponse.data)) {
+            alreadyGone = true;
+          } else {
+            throw new Error(`delivery-order/delete.do failed for DO ${row.delivery_order_id}: ${JSON.stringify(deleteDoResponse.data?.d ?? deleteDoResponse.status)}`);
+          }
         }
       }
 
       const deleteSoResponse = await callAccurateApi("POST", "sales-order/delete.do", { id: row.sales_order_id });
       if (!deleteSoResponse.data?.s) {
-        throw new Error(`sales-order/delete.do failed for SO ${row.sales_order_id}: ${JSON.stringify(deleteSoResponse.data?.d ?? deleteSoResponse.status)}`);
+        if (isAlreadyGone(deleteSoResponse.data)) {
+          alreadyGone = true;
+        } else {
+          throw new Error(`sales-order/delete.do failed for SO ${row.sales_order_id}: ${JSON.stringify(deleteSoResponse.data?.d ?? deleteSoResponse.status)}`);
+        }
       }
 
       db.prepare("DELETE FROM tiktok_orders WHERE order_id = ?").run(orderId);
-      console.log(`[orderAdmin] deleted SO ${row.sales_order_id}${row.delivery_order_id ? ` and DO ${row.delivery_order_id}` : ""} for TikTok order ${orderId}`);
-      results.push({ orderId, deleted: { salesOrderId: row.sales_order_id, deliveryOrderId: row.delivery_order_id } });
+      console.log(`[orderAdmin] ${alreadyGone ? "cleared local row for already-deleted" : "deleted"} SO ${row.sales_order_id}${row.delivery_order_id ? ` and DO ${row.delivery_order_id}` : ""} for TikTok order ${orderId}`);
+      results.push({ orderId, deleted: { salesOrderId: row.sales_order_id, deliveryOrderId: row.delivery_order_id }, alreadyGone });
     } catch (err: any) {
       console.error(`[orderAdmin] bulk-delete failed for TikTok order ${orderId}:`, err?.message ?? err);
       results.push({ orderId, error: err?.message ?? String(err) });
