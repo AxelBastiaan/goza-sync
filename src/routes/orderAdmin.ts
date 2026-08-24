@@ -3,6 +3,7 @@ import { db } from "../db";
 import { getOrderLineItems } from "../services/tiktokOrders";
 import { createDeliveryOrder, createSalesInvoice } from "../services/accurateSalesFlow";
 import { getTikTokStores } from "../services/storesRepo";
+import { callAccurateApi } from "../services/accurateClient";
 
 const router = Router();
 
@@ -56,23 +57,65 @@ router.post("/tiktok/:orderId/catchup", async (req: Request, res: Response) => {
     return res.status(400).json({ error: `Invalid transDate "${transDateStr}"` });
   }
 
-  const lineItems = await getOrderLineItems(orderId, credentials);
+  // This calls real Accurate write APIs — a rejection here (e.g. a document
+  // number collision) must come back as a normal error response, not crash the
+  // whole process. Anything already committed to Accurate/our own DB before the
+  // failure (e.g. a Delivery Order created just before a Sales Invoice attempt
+  // fails) stays committed; the response reports exactly how far it got.
+  try {
+    const lineItems = await getOrderLineItems(orderId, credentials);
 
-  if (row.status === "created") {
-    const deliveryOrderId = await createDeliveryOrder(row.sales_order_id, lineItems, undefined, transDate);
-    db.prepare("UPDATE tiktok_orders SET delivery_order_id = ?, status = 'shipped' WHERE order_id = ?").run(deliveryOrderId, orderId);
-    row = { ...row, delivery_order_id: deliveryOrderId, status: "shipped" };
-    console.log(`[orderAdmin] manually created Delivery Order ${deliveryOrderId} for TikTok order ${orderId} (SO ${row.sales_order_id})`);
+    if (row.status === "created") {
+      const deliveryOrderId = await createDeliveryOrder(row.sales_order_id, lineItems, undefined, transDate);
+      db.prepare("UPDATE tiktok_orders SET delivery_order_id = ?, status = 'shipped' WHERE order_id = ?").run(deliveryOrderId, orderId);
+      row = { ...row, delivery_order_id: deliveryOrderId, status: "shipped" };
+      console.log(`[orderAdmin] manually created Delivery Order ${deliveryOrderId} for TikTok order ${orderId} (SO ${row.sales_order_id})`);
+    }
+
+    if (targetStage === "invoiced" && row.status === "shipped") {
+      const salesInvoiceId = await createSalesInvoice(orderId, row.sales_order_id, row.delivery_order_id!, lineItems, undefined, transDate);
+      db.prepare("UPDATE tiktok_orders SET sales_invoice_id = ?, status = 'invoiced' WHERE order_id = ?").run(salesInvoiceId, orderId);
+      row = { ...row, sales_invoice_id: salesInvoiceId, status: "invoiced" };
+      console.log(`[orderAdmin] manually created Sales Invoice ${salesInvoiceId} for TikTok order ${orderId}`);
+    }
+
+    res.json(row);
+  } catch (err: any) {
+    console.error(`[orderAdmin] catchup failed for TikTok order ${orderId}:`, err?.message ?? err);
+    res.status(502).json({ error: err?.message ?? "Catchup failed", progress: row });
+  }
+});
+
+// Read-only diagnostic: looks up whether a document with this exact `number`
+// already exists in Accurate. Sales Invoice's `number` and Sales Order's
+// `poNumber` share one uniqueness space in Accurate (confirmed live in
+// accurateSalesFlow.ts) — this is how to find out what already holds an
+// identifier before attempting to create a document that reuses it.
+router.get("/accurate/lookup", async (req: Request, res: Response) => {
+  const docType = req.query.docType as string | undefined;
+  const number = req.query.number as string | undefined;
+  const validDocTypes = ["sales-invoice", "sales-order", "delivery-order"];
+
+  if (!docType || !validDocTypes.includes(docType)) {
+    return res.status(400).json({ error: `docType must be one of: ${validDocTypes.join(", ")}` });
+  }
+  if (!number) {
+    return res.status(400).json({ error: "number is required" });
   }
 
-  if (targetStage === "invoiced" && row.status === "shipped") {
-    const salesInvoiceId = await createSalesInvoice(orderId, row.sales_order_id, row.delivery_order_id!, lineItems, undefined, transDate);
-    db.prepare("UPDATE tiktok_orders SET sales_invoice_id = ?, status = 'invoiced' WHERE order_id = ?").run(salesInvoiceId, orderId);
-    row = { ...row, sales_invoice_id: salesInvoiceId, status: "invoiced" };
-    console.log(`[orderAdmin] manually created Sales Invoice ${salesInvoiceId} for TikTok order ${orderId}`);
-  }
+  // Sales Order's shared-identifier field is poNumber (createSalesOrder sets
+  // poNumber, not number); Sales/Delivery Invoice-family docs use number directly.
+  const filterField = docType === "sales-order" ? "poNumber" : "number";
 
-  res.json(row);
+  try {
+    const response = await callAccurateApi("GET", `${docType}/list.do`, {
+      [`filter.${filterField}.op`]: "EQUAL",
+      [`filter.${filterField}.val`]: number,
+    });
+    res.json(response.data);
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message ?? "Lookup failed" });
+  }
 });
 
 export default router;
