@@ -12,6 +12,7 @@
     <div class="nav-item active" data-view="mapping"><span class="nav-icon">📦</span> Product Mapping</div>
     <div class="nav-item" data-view="integrations"><span class="nav-icon">🔌</span> Integrations</div>
     <div class="nav-item" data-view="import"><span class="nav-icon">⬇️</span> Import</div>
+    <div class="nav-item" data-view="opname"><span class="nav-icon">🧮</span> Stock Opname</div>
     <div class="nav-item" data-view="settings"><span class="nav-icon">⚙️</span> Settings</div>
     <div class="nav-item" id="logout-btn" style="margin-top:auto;"><span class="nav-icon">🚪</span> Log out</div>
   </nav>
@@ -79,6 +80,23 @@
         </table>
 
         <button type="button" id="import-commit-btn" style="margin-top:1rem;" hidden>Import 0 selected</button>
+      </main>
+    </section>
+
+    <!-- ============ Stock Opname view ============ -->
+    <section class="view" id="view-opname" hidden>
+      <main class="card">
+        <h2>Stock Opname</h2>
+        <p class="subtitle">Today's stock count checklist. Active items are automatically split across every work day of the year (Sundays and tanggal merah excluded) — anything left unchecked stays on the list and more is added the next work day.</p>
+
+        <div class="toolbar">
+          <button type="button" class="secondary" id="opname-select-all-btn">Select All</button>
+          <span id="opname-cycle-info" class="subtitle" style="margin-left:auto;"></span>
+        </div>
+        <p id="opname-message" class="message" hidden></p>
+
+        <div id="opname-list"></div>
+        <p id="opname-empty" class="empty-state" hidden>Nothing to count today — check back on the next work day.</p>
       </main>
     </section>
 

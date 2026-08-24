@@ -144,3 +144,43 @@ db.exec(`
 // Order authoritatively and in real time — no local bookkeeping needed. Dropped here
 // rather than left as unused dead schema.
 db.exec(`DROP TABLE IF EXISTS stock_reservations`);
+
+// One row per active SKU ever queued into the daily stock-opname rotation.
+// released_date is set once the item is pulled into the worker's daily list;
+// completed_date is set when the worker marks it done. Both NULL = still waiting
+// in the queue. Rows are never deleted, so a completed/released history persists
+// across yearly cycle rollovers.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS stock_opname_items (
+    sku TEXT PRIMARY KEY,
+    item_name TEXT NOT NULL,
+    released_date TEXT,
+    completed_date TEXT
+  )
+`);
+
+// Single row (id=1) tracking the current yearly rotation: which year it covers,
+// the daily batch size computed for that year (active item count / work days in
+// the year), the ordered queue of SKUs not yet released this year, and the last
+// date a batch was released — so a batch is only released once per work day no
+// matter how many times the stock-opname tab is opened that day.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS stock_opname_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    cycle_year INTEGER NOT NULL,
+    batch_size INTEGER NOT NULL,
+    queue_json TEXT NOT NULL,
+    last_release_date TEXT
+  )
+`);
+
+// Cached per-year Indonesian public holiday ("tanggal merah") dates, so the
+// holiday API is only called once per year instead of on every request.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS stock_opname_holidays (
+    year INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    name TEXT,
+    PRIMARY KEY (year, date)
+  )
+`);

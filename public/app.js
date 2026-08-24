@@ -14,6 +14,7 @@ function switchView(view) {
   document.querySelectorAll(".view").forEach((v) => { v.hidden = v.id !== `view-${view}`; });
   // Re-read the store list on entry so a store connected since page load shows up.
   if (view === "import") loadImportStores();
+  if (view === "opname") loadOpnameToday();
 }
 document.querySelectorAll(".nav-item").forEach((item) => {
   item.addEventListener("click", () => switchView(item.dataset.view));
@@ -1016,3 +1017,106 @@ loadImportStores();
 
   history.replaceState({}, "", location.pathname);
 })();
+
+// ---- Stock Opname ----
+const opnameList = document.getElementById("opname-list");
+const opnameEmpty = document.getElementById("opname-empty");
+const opnameMessage = document.getElementById("opname-message");
+const opnameCycleInfo = document.getElementById("opname-cycle-info");
+const opnameSelectAllBtn = document.getElementById("opname-select-all-btn");
+
+function showOpnameMessage(text, type) {
+  opnameMessage.textContent = text;
+  opnameMessage.className = `message ${type}`;
+  opnameMessage.hidden = false;
+}
+
+function renderOpnameItems(items, cycle) {
+  opnameList.innerHTML = "";
+  opnameEmpty.hidden = items.length !== 0;
+  opnameSelectAllBtn.hidden = items.length === 0;
+
+  opnameCycleInfo.textContent = cycle ? `${cycle.cycle_year} · ${cycle.batch_size} items/work day` : "";
+
+  for (const item of items) {
+    const row = document.createElement("div");
+    row.className = "store-row";
+    row.dataset.sku = item.sku;
+
+    const label = document.createElement("label");
+    label.style.display = "flex";
+    label.style.alignItems = "center";
+    label.style.gap = "0.6rem";
+    label.style.cursor = "pointer";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+
+    const info = document.createElement("div");
+    info.innerHTML = `<div class="store-name">${item.item_name || item.sku}</div><div class="muted" style="font-size:0.8rem;">${item.sku}</div>`;
+
+    label.append(checkbox, info);
+    row.append(label);
+    opnameList.appendChild(row);
+
+    checkbox.addEventListener("change", async () => {
+      checkbox.disabled = true;
+      try {
+        await completeOpnameItems([item.sku]);
+        row.remove();
+        if (opnameList.children.length === 0) {
+          opnameEmpty.hidden = false;
+          opnameSelectAllBtn.hidden = true;
+        }
+      } catch (err) {
+        checkbox.disabled = false;
+        checkbox.checked = false;
+        showOpnameMessage(`Failed to mark ${item.sku} done: ${err.message}`, "error");
+      }
+    });
+  }
+}
+
+async function completeOpnameItems(skus) {
+  const res = await fetch("/api/stock-opname/complete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ skus }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+async function loadOpnameToday() {
+  opnameMessage.hidden = true;
+  try {
+    const res = await fetch("/api/stock-opname/today");
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    renderOpnameItems(data.items, data.cycle);
+  } catch (err) {
+    showOpnameMessage(`Failed to load today's stock opname list: ${err.message}`, "error");
+  }
+}
+
+opnameSelectAllBtn.addEventListener("click", async () => {
+  const skus = Array.from(opnameList.querySelectorAll("[data-sku]")).map((row) => row.dataset.sku);
+  if (skus.length === 0) return;
+  opnameSelectAllBtn.disabled = true;
+  try {
+    await completeOpnameItems(skus);
+    opnameList.innerHTML = "";
+    opnameEmpty.hidden = false;
+    opnameSelectAllBtn.hidden = true;
+  } catch (err) {
+    showOpnameMessage(`Failed to mark items done: ${err.message}`, "error");
+  } finally {
+    opnameSelectAllBtn.disabled = false;
+  }
+});
