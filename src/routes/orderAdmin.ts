@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { db } from "../db";
-import { getOrderLineItems } from "../services/tiktokOrders";
+import { getOrderLineItems, getOrderStatus } from "../services/tiktokOrders";
 import { createDeliveryOrder, createSalesInvoice } from "../services/accurateSalesFlow";
 import { getTikTokStores } from "../services/storesRepo";
 import { callAccurateApi } from "../services/accurateClient";
@@ -84,6 +84,87 @@ router.post("/tiktok/:orderId/catchup", async (req: Request, res: Response) => {
     console.error(`[orderAdmin] catchup failed for TikTok order ${orderId}:`, err?.message ?? err);
     res.status(502).json({ error: err?.message ?? "Catchup failed", progress: row });
   }
+});
+
+// Batch reads each order's real current status straight from TikTok, rather
+// than trusting whatever the last webhook we happened to receive said —
+// needed before deciding what to catch up, since a webhook can be missed
+// entirely rather than just arriving out of order.
+router.post("/tiktok/bulk-live-status", async (req: Request, res: Response) => {
+  const orderIds = req.body?.orderIds as string[] | undefined;
+  if (!Array.isArray(orderIds) || orderIds.length === 0) {
+    return res.status(400).json({ error: "orderIds must be a non-empty array" });
+  }
+
+  const stores = getTikTokStores();
+  if (stores.length !== 1) {
+    return res.status(400).json({ error: `Expected exactly one connected TikTok store to resolve credentials from, found ${stores.length}` });
+  }
+  const credentials = stores[0].credentials;
+
+  const results: { orderId: string; status?: string; error?: string }[] = [];
+  for (const orderId of orderIds) {
+    try {
+      const status = await getOrderStatus(orderId, credentials);
+      results.push({ orderId, status });
+    } catch (err: any) {
+      results.push({ orderId, error: err?.message ?? String(err) });
+    }
+  }
+
+  res.json(results);
+});
+
+// Deletes the Delivery Order (if any) and the Sales Order for each given order,
+// then removes the local tiktok_orders row entirely — for orders whose real
+// bookkeeping happened by hand directly in Accurate (pre-automation), where our
+// own automated SO/DO are redundant duplicates rather than the source of truth.
+// Never touches an order already at "invoiced" (a Sales Invoice references its
+// Sales Order — deleting under it would corrupt real accounting data) or
+// "cancelled" (already reconciled). Processes each order independently so one
+// failure doesn't abort the rest of the batch.
+router.post("/tiktok/bulk-delete-so-do", async (req: Request, res: Response) => {
+  const orderIds = req.body?.orderIds as string[] | undefined;
+  if (!Array.isArray(orderIds) || orderIds.length === 0) {
+    return res.status(400).json({ error: "orderIds must be a non-empty array" });
+  }
+
+  const results: { orderId: string; deleted?: { salesOrderId: number; deliveryOrderId: number | null }; error?: string }[] = [];
+
+  for (const orderId of orderIds) {
+    try {
+      const row = db.prepare("SELECT * FROM tiktok_orders WHERE order_id = ?").get(orderId) as TikTokOrderRow | undefined;
+      if (!row) {
+        results.push({ orderId, error: "No row on file" });
+        continue;
+      }
+      if (row.status === "invoiced" || row.status === "cancelled") {
+        results.push({ orderId, error: `Refusing to delete — order is already "${row.status}"` });
+        continue;
+      }
+
+      if (row.delivery_order_id !== null) {
+        const deleteDoResponse = await callAccurateApi("POST", "delivery-order/delete.do", { id: row.delivery_order_id });
+        if (!deleteDoResponse.data?.s) {
+          throw new Error(`delivery-order/delete.do failed for DO ${row.delivery_order_id}: ${JSON.stringify(deleteDoResponse.data?.d ?? deleteDoResponse.status)}`);
+        }
+      }
+
+      const deleteSoResponse = await callAccurateApi("POST", "sales-order/delete.do", { id: row.sales_order_id });
+      if (!deleteSoResponse.data?.s) {
+        throw new Error(`sales-order/delete.do failed for SO ${row.sales_order_id}: ${JSON.stringify(deleteSoResponse.data?.d ?? deleteSoResponse.status)}`);
+      }
+
+      db.prepare("DELETE FROM tiktok_orders WHERE order_id = ?").run(orderId);
+      console.log(`[orderAdmin] deleted SO ${row.sales_order_id}${row.delivery_order_id ? ` and DO ${row.delivery_order_id}` : ""} for TikTok order ${orderId}`);
+      results.push({ orderId, deleted: { salesOrderId: row.sales_order_id, deliveryOrderId: row.delivery_order_id } });
+    } catch (err: any) {
+      console.error(`[orderAdmin] bulk-delete failed for TikTok order ${orderId}:`, err?.message ?? err);
+      results.push({ orderId, error: err?.message ?? String(err) });
+    }
+  }
+
+  res.json(results);
 });
 
 // Read-only census of every order this app has ever recorded, grouped by

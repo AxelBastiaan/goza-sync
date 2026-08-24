@@ -11,6 +11,19 @@ export interface OrderLineItem {
   originalPrice: number;
 }
 
+// Reads the order's real current status directly from TikTok, rather than
+// trusting whatever the last webhook we happened to receive said — used for
+// reconciling orders where webhook delivery may have been missed entirely.
+export async function getOrderStatus(orderId: string, credentials: TikTokStoreCredentials): Promise<string | undefined> {
+  const response = await callTikTokApi("GET", "/order/202309/orders", { ids: orderId }, null, credentials);
+  const data = response.data;
+  if (data?.code !== 0) {
+    console.warn(`[tiktokOrders] order status request failed for ${orderId}: ${data?.message ?? response.status}`);
+    return undefined;
+  }
+  return data?.data?.orders?.[0]?.status;
+}
+
 // Takes a specific store's credentials — an order belongs to exactly one shop, and
 // with multiple TikTok stores connected there's no longer a single global token to
 // assume; the caller (tiktokWebhook.ts) resolves which store from the webhook's shop_id.
