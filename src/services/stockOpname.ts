@@ -4,7 +4,13 @@ import * as XLSX from "xlsx";
 import { db } from "../db";
 
 const EXCEL_PATH = path.join(__dirname, "..", "..", "sales-recall", "CATEGORY PRODUCT.xlsx");
-const HOLIDAY_API = "https://api-harilibur.vercel.app/api";
+// Google's own public "Holidays in Indonesia" calendar feed — chosen over a couple of
+// free Indonesian-holiday REST APIs (api-harilibur.vercel.app, dayoffapi.vercel.app)
+// that both turned out to be dead (Vercel "DEPLOYMENT_DISABLED", HTTP 402) when this
+// was actually deployed. Includes both national holidays and cuti bersama (joint
+// leave days) as plain one-off VEVENTs — no RRULE recurrence to expand.
+const HOLIDAY_ICS_URL =
+  "https://calendar.google.com/calendar/ical/en.indonesian%23holiday%40group.v.calendar.google.com/public/basic.ics";
 
 export interface StockOpnameItem {
   sku: string;
@@ -76,9 +82,33 @@ export function loadActiveItems(): StockOpnameItem[] {
   return items;
 }
 
+// Parses the flat VEVENT list out of the ICS feed — DTSTART;VALUE=DATE:YYYYMMDD plus
+// the following SUMMARY line. Deliberately not a general ICS parser (no RRULE/VALARM/
+// multi-line folding support): this feed only ever contains simple one-off all-day
+// events, confirmed by inspecting the raw feed before relying on it.
+function parseHolidayIcs(ics: string): { date: string; name: string }[] {
+  const lines = ics.split(/\r?\n/);
+  const holidays: { date: string; name: string }[] = [];
+  let currentDate: string | null = null;
+
+  for (const line of lines) {
+    const dtMatch = line.match(/^DTSTART;VALUE=DATE:(\d{4})(\d{2})(\d{2})/);
+    if (dtMatch) {
+      currentDate = `${dtMatch[1]}-${dtMatch[2]}-${dtMatch[3]}`;
+      continue;
+    }
+    const summaryMatch = line.match(/^SUMMARY:(.*)$/);
+    if (summaryMatch && currentDate) {
+      holidays.push({ date: currentDate, name: summaryMatch[1].trim() });
+      currentDate = null;
+    }
+  }
+  return holidays;
+}
+
 // Both national holidays and "cuti bersama" (joint leave days) count as "tanggal
 // merah" for this purpose — both are printed red on an Indonesian calendar and
-// neither is a work day.
+// neither is a work day, and this feed includes both.
 export async function fetchHolidays(year: number): Promise<Set<string>> {
   const cached = db.prepare("SELECT date FROM stock_opname_holidays WHERE year = ?").all(year) as { date: string }[];
   if (cached.length > 0) {
@@ -86,16 +116,17 @@ export async function fetchHolidays(year: number): Promise<Set<string>> {
   }
 
   try {
-    const res = await axios.get(HOLIDAY_API, { params: { year } });
-    const rows = (res.data ?? []) as { holiday_date: string; holiday_name?: string }[];
+    const res = await axios.get<string>(HOLIDAY_ICS_URL, { responseType: "text" });
+    const holidays = parseHolidayIcs(res.data).filter((h) => h.date.startsWith(`${year}-`));
+
     const insert = db.prepare(
       "INSERT OR IGNORE INTO stock_opname_holidays (year, date, name) VALUES (?, ?, ?)"
     );
-    const insertMany = db.transaction((entries: typeof rows) => {
-      for (const r of entries) insert.run(year, r.holiday_date, r.holiday_name ?? null);
+    const insertMany = db.transaction((entries: typeof holidays) => {
+      for (const h of entries) insert.run(year, h.date, h.name);
     });
-    insertMany(rows);
-    return new Set(rows.map((r) => r.holiday_date));
+    insertMany(holidays);
+    return new Set(holidays.map((h) => h.date));
   } catch (err) {
     console.warn(`[stockOpname] Failed to fetch ${year} holiday list, treating it as having no holidays: ${(err as Error).message}`);
     return new Set();
