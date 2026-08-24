@@ -30,5 +30,11 @@ COPY public ./public
 COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
 
+# sales-recall/ is gitignored (hand-maintained business spreadsheet, kept out of
+# the public repo) — its CATEGORY PRODUCT.xlsx is placed directly in the VPS's
+# build context (not committed), so this only works when that file is present
+# there. Read live by services/stockOpname.ts (active-item / discontinued status).
+COPY sales-recall/CATEGORY\ PRODUCT.xlsx ./sales-recall/CATEGORY\ PRODUCT.xlsx
+
 EXPOSE 8000
 ENTRYPOINT ["./docker-entrypoint.sh"]
