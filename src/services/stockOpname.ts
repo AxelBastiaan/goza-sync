@@ -233,6 +233,26 @@ export function markDone(skus: string[]): void {
   updateMany(skus);
 }
 
+// Clears completed_date only — released_date is untouched, so an undone item
+// reappears in getTodayList() under the same date container it was originally
+// released into (today's or an older carried-over one).
+export function undoDone(skus: string[]): void {
+  if (skus.length === 0) return;
+  const update = db.prepare("UPDATE stock_opname_items SET completed_date = NULL WHERE sku = ?");
+  const updateMany = db.transaction((list: string[]) => {
+    for (const sku of list) update.run(sku);
+  });
+  updateMany(skus);
+}
+
+export function getLogs(): (StockOpnameItem & { completed_date: string })[] {
+  return db
+    .prepare(
+      "SELECT sku, item_name, completed_date FROM stock_opname_items WHERE completed_date IS NOT NULL ORDER BY completed_date DESC, sku"
+    )
+    .all() as (StockOpnameItem & { completed_date: string })[];
+}
+
 export function getCycleInfo(): { cycle_year: number; batch_size: number } | null {
   const state = db.prepare("SELECT cycle_year, batch_size FROM stock_opname_state WHERE id = 1").get() as
     | { cycle_year: number; batch_size: number }

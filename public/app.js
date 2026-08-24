@@ -14,7 +14,7 @@ function switchView(view) {
   document.querySelectorAll(".view").forEach((v) => { v.hidden = v.id !== `view-${view}`; });
   // Re-read the store list on entry so a store connected since page load shows up.
   if (view === "import") loadImportStores();
-  if (view === "opname") loadOpnameToday();
+  if (view === "opname") loadOpnameChecklist();
 }
 document.querySelectorAll(".nav-item").forEach((item) => {
   item.addEventListener("click", () => switchView(item.dataset.view));
@@ -1019,11 +1019,22 @@ loadImportStores();
 })();
 
 // ---- Stock Opname ----
-const opnameList = document.getElementById("opname-list");
+const opnameGroups = document.getElementById("opname-groups");
 const opnameEmpty = document.getElementById("opname-empty");
 const opnameMessage = document.getElementById("opname-message");
 const opnameCycleInfo = document.getElementById("opname-cycle-info");
 const opnameSelectAllBtn = document.getElementById("opname-select-all-btn");
+const opnameMarkDoneBtn = document.getElementById("opname-mark-done-btn");
+const opnameChecklistView = document.getElementById("opname-checklist-view");
+const opnameLogsView = document.getElementById("opname-logs-view");
+const opnameLogsGroups = document.getElementById("opname-logs-groups");
+const opnameLogsEmpty = document.getElementById("opname-logs-empty");
+const opnameTabChecklist = document.getElementById("opname-tab-checklist");
+const opnameTabLogs = document.getElementById("opname-tab-logs");
+const toastContainer = document.getElementById("toast-container");
+
+let opnameToday = null;
+const opnameSelected = new Set();
 
 function showOpnameMessage(text, type) {
   opnameMessage.textContent = text;
@@ -1031,50 +1042,111 @@ function showOpnameMessage(text, type) {
   opnameMessage.hidden = false;
 }
 
-function renderOpnameItems(items, cycle) {
-  opnameList.innerHTML = "";
+function showToast(text, type) {
+  const toast = document.createElement("div");
+  toast.className = `toast ${type || ""}`.trim();
+  toast.textContent = text;
+  toastContainer.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+// Formatted purely from the y/m/d components (via a UTC-anchored Date + a UTC
+// formatter) so the label never shifts a day depending on the viewer's own
+// timezone — the string is a Jakarta calendar date, not an instant in time.
+function formatOpnameDate(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", {
+    timeZone: "UTC",
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
+function groupByDate(items, dateField) {
+  const groups = new Map();
+  for (const item of items) {
+    const key = item[dateField];
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  return groups;
+}
+
+function updateOpnameMarkDoneBtn() {
+  opnameMarkDoneBtn.disabled = opnameSelected.size === 0;
+  opnameMarkDoneBtn.textContent = opnameSelected.size > 0 ? `Mark Selected Done (${opnameSelected.size})` : "Mark Selected Done";
+}
+
+function updateOpnameSelectAllBtn() {
+  const checkboxes = opnameGroups.querySelectorAll('input[type="checkbox"]');
+  const allChecked = checkboxes.length > 0 && Array.from(checkboxes).every((cb) => cb.checked);
+  opnameSelectAllBtn.textContent = allChecked ? "Deselect All" : "Select All";
+}
+
+function renderOpnameChecklist(items, cycle, today) {
+  opnameToday = today;
+  opnameSelected.clear();
+  updateOpnameMarkDoneBtn();
+
+  opnameGroups.innerHTML = "";
   opnameEmpty.hidden = items.length !== 0;
   opnameSelectAllBtn.hidden = items.length === 0;
+  opnameMarkDoneBtn.hidden = items.length === 0;
 
   opnameCycleInfo.textContent = cycle ? `${cycle.cycle_year} · ${cycle.batch_size} items/work day` : "";
 
-  for (const item of items) {
-    const row = document.createElement("div");
-    row.className = "store-row";
-    row.dataset.sku = item.sku;
+  const groups = groupByDate(items, "released_date");
+  const dates = Array.from(groups.keys()).sort();
 
-    const label = document.createElement("label");
-    label.style.display = "flex";
-    label.style.alignItems = "center";
-    label.style.gap = "0.6rem";
-    label.style.cursor = "pointer";
+  for (const date of dates) {
+    const groupEl = document.createElement("div");
+    groupEl.className = "opname-date-group";
 
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
+    const header = document.createElement("div");
+    header.className = "opname-date-header";
+    const isToday = date === today;
+    header.innerHTML = `<strong>${isToday ? "Today · " : ""}${formatOpnameDate(date)}</strong><span class="count">${groups.get(date).length} item${groups.get(date).length === 1 ? "" : "s"}</span>${isToday ? "" : '<span class="badge">carried over</span>'}`;
 
-    const info = document.createElement("div");
-    info.innerHTML = `<div class="store-name">${item.item_name || item.sku}</div><div class="muted" style="font-size:0.8rem;">${item.sku}</div>`;
+    const itemsEl = document.createElement("div");
+    itemsEl.className = "opname-date-items";
 
-    label.append(checkbox, info);
-    row.append(label);
-    opnameList.appendChild(row);
+    for (const item of groups.get(date)) {
+      const row = document.createElement("div");
+      row.className = "store-row";
+      row.dataset.sku = item.sku;
 
-    checkbox.addEventListener("change", async () => {
-      checkbox.disabled = true;
-      try {
-        await completeOpnameItems([item.sku]);
-        row.remove();
-        if (opnameList.children.length === 0) {
-          opnameEmpty.hidden = false;
-          opnameSelectAllBtn.hidden = true;
-        }
-      } catch (err) {
-        checkbox.disabled = false;
-        checkbox.checked = false;
-        showOpnameMessage(`Failed to mark ${item.sku} done: ${err.message}`, "error");
-      }
-    });
+      const label = document.createElement("label");
+      label.style.display = "flex";
+      label.style.alignItems = "center";
+      label.style.gap = "0.6rem";
+      label.style.cursor = "pointer";
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = opnameSelected.has(item.sku);
+
+      const info = document.createElement("div");
+      info.innerHTML = `<div class="store-name">${item.item_name || item.sku}</div><div class="muted" style="font-size:0.8rem;">${item.sku}</div>`;
+
+      label.append(checkbox, info);
+      row.append(label);
+      itemsEl.appendChild(row);
+
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) opnameSelected.add(item.sku);
+        else opnameSelected.delete(item.sku);
+        updateOpnameMarkDoneBtn();
+        updateOpnameSelectAllBtn();
+      });
+    }
+
+    groupEl.append(header, itemsEl);
+    opnameGroups.appendChild(groupEl);
   }
+
+  updateOpnameSelectAllBtn();
 }
 
 async function completeOpnameItems(skus) {
@@ -1090,7 +1162,20 @@ async function completeOpnameItems(skus) {
   return res.json();
 }
 
-async function loadOpnameToday() {
+async function undoOpnameItems(skus) {
+  const res = await fetch("/api/stock-opname/undo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ skus }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+async function loadOpnameChecklist() {
   opnameMessage.hidden = true;
   try {
     const res = await fetch("/api/stock-opname/today");
@@ -1099,24 +1184,121 @@ async function loadOpnameToday() {
       throw new Error(data.error || `HTTP ${res.status}`);
     }
     const data = await res.json();
-    renderOpnameItems(data.items, data.cycle);
+    renderOpnameChecklist(data.items, data.cycle, data.today);
   } catch (err) {
-    showOpnameMessage(`Failed to load today's stock opname list: ${err.message}`, "error");
+    showOpnameMessage(`Failed to load the stock opname checklist: ${err.message}`, "error");
   }
 }
 
-opnameSelectAllBtn.addEventListener("click", async () => {
-  const skus = Array.from(opnameList.querySelectorAll("[data-sku]")).map((row) => row.dataset.sku);
+function renderOpnameLogs(logs) {
+  opnameLogsGroups.innerHTML = "";
+  opnameLogsEmpty.hidden = logs.length !== 0;
+
+  const groups = groupByDate(logs, "completed_date");
+  const dates = Array.from(groups.keys()).sort().reverse();
+
+  for (const date of dates) {
+    const groupEl = document.createElement("div");
+    groupEl.className = "opname-date-group";
+
+    const header = document.createElement("div");
+    header.className = "opname-date-header";
+    header.innerHTML = `<strong>${formatOpnameDate(date)}</strong><span class="count">${groups.get(date).length} item${groups.get(date).length === 1 ? "" : "s"}</span>`;
+
+    const itemsEl = document.createElement("div");
+    itemsEl.className = "opname-date-items";
+
+    for (const item of groups.get(date)) {
+      const row = document.createElement("div");
+      row.className = "store-row";
+
+      const info = document.createElement("div");
+      info.innerHTML = `<div class="store-name">${item.item_name || item.sku}</div><div class="muted" style="font-size:0.8rem;">${item.sku}</div>`;
+
+      const undoBtn = document.createElement("button");
+      undoBtn.type = "button";
+      undoBtn.className = "secondary";
+      undoBtn.textContent = "Undo";
+      undoBtn.addEventListener("click", async () => {
+        undoBtn.disabled = true;
+        try {
+          await undoOpnameItems([item.sku]);
+          row.remove();
+          showToast(`↺ ${item.item_name || item.sku} undone`, "undo");
+          if (itemsEl.children.length === 0) groupEl.remove();
+          if (opnameLogsGroups.children.length === 0) opnameLogsEmpty.hidden = false;
+          loadOpnameChecklist();
+        } catch (err) {
+          undoBtn.disabled = false;
+          showOpnameMessage(`Failed to undo ${item.sku}: ${err.message}`, "error");
+        }
+      });
+
+      row.append(info, undoBtn);
+      itemsEl.appendChild(row);
+    }
+
+    groupEl.append(header, itemsEl);
+    opnameLogsGroups.appendChild(groupEl);
+  }
+}
+
+async function loadOpnameLogs() {
+  opnameMessage.hidden = true;
+  try {
+    const res = await fetch("/api/stock-opname/logs");
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    renderOpnameLogs(data.logs);
+  } catch (err) {
+    showOpnameMessage(`Failed to load stock opname logs: ${err.message}`, "error");
+  }
+}
+
+function switchOpnameSubview(view) {
+  opnameTabChecklist.classList.toggle("active", view === "checklist");
+  opnameTabLogs.classList.toggle("active", view === "logs");
+  opnameChecklistView.hidden = view !== "checklist";
+  opnameLogsView.hidden = view !== "logs";
+  if (view === "logs") loadOpnameLogs();
+}
+opnameTabChecklist.addEventListener("click", () => switchOpnameSubview("checklist"));
+opnameTabLogs.addEventListener("click", () => switchOpnameSubview("logs"));
+
+opnameSelectAllBtn.addEventListener("click", () => {
+  const checkboxes = opnameGroups.querySelectorAll('input[type="checkbox"]');
+  const allChecked = checkboxes.length > 0 && Array.from(checkboxes).every((cb) => cb.checked);
+
+  checkboxes.forEach((cb) => {
+    cb.checked = !allChecked;
+    const sku = cb.closest("[data-sku]").dataset.sku;
+    if (allChecked) opnameSelected.delete(sku);
+    else opnameSelected.add(sku);
+  });
+  updateOpnameMarkDoneBtn();
+  updateOpnameSelectAllBtn();
+});
+
+opnameMarkDoneBtn.addEventListener("click", async () => {
+  const skus = Array.from(opnameSelected);
   if (skus.length === 0) return;
-  opnameSelectAllBtn.disabled = true;
+  opnameMarkDoneBtn.disabled = true;
+  const skuToName = {};
+  opnameGroups.querySelectorAll("[data-sku]").forEach((row) => {
+    skuToName[row.dataset.sku] = row.querySelector(".store-name")?.textContent || row.dataset.sku;
+  });
+
   try {
     await completeOpnameItems(skus);
-    opnameList.innerHTML = "";
-    opnameEmpty.hidden = false;
-    opnameSelectAllBtn.hidden = true;
+    for (const sku of skus) {
+      showToast(`✓ ${skuToName[sku] || sku} marked done`, "success");
+    }
+    await loadOpnameChecklist();
   } catch (err) {
     showOpnameMessage(`Failed to mark items done: ${err.message}`, "error");
-  } finally {
-    opnameSelectAllBtn.disabled = false;
+    opnameMarkDoneBtn.disabled = false;
   }
 });

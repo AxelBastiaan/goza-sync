@@ -675,6 +675,107 @@ a.stores-link:hover {
   width: 30px;
 }
 
+/* Tabs read as navigation (underline indicator, no fill/border) so they're never
+   mistaken for the action buttons (Select All / Mark Selected Done) below them. */
+.tabbar {
+  display: flex;
+  gap: 1.5rem;
+  border-bottom: 1px solid #eee;
+  margin: 1.1rem 0 1.25rem;
+}
+
+.tab-btn {
+  background: none;
+  border: none;
+  padding: 0.55rem 0.05rem 0.6rem;
+  font-size: 0.95rem;
+  color: #666;
+  cursor: pointer;
+  font-family: inherit;
+  position: relative;
+}
+
+.tab-btn:hover {
+  color: #1a1a1a;
+}
+
+.tab-btn.active {
+  color: #1a1a1a;
+  font-weight: 600;
+}
+
+.tab-btn.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: #2563eb;
+  border-radius: 2px 2px 0 0;
+}
+
+.opname-date-group {
+  margin-bottom: 1.25rem;
+  border: 1px solid #eee;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.opname-date-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.9rem;
+  background: #fafafa;
+  border-bottom: 1px solid #eee;
+  font-size: 0.9rem;
+}
+
+.opname-date-header .count {
+  color: #9ca3af;
+  font-size: 0.8rem;
+}
+
+.opname-date-items {
+  padding: 0 0.9rem;
+}
+
+.opname-date-items .store-row:last-child {
+  border-bottom: none;
+}
+
+.toast-container {
+  position: fixed;
+  bottom: 1.25rem;
+  right: 1.25rem;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 0.5rem;
+  z-index: 1000;
+  max-width: min(320px, calc(100vw - 2.5rem));
+}
+
+.toast {
+  background: #dcfce7;
+  color: #166534;
+  padding: 0.6rem 0.9rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  animation: toast-in 0.15s ease-out;
+}
+
+.toast.undo {
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 @media (prefers-color-scheme: dark) {
   body {
     background: #17181c;
@@ -765,5 +866,25 @@ a.stores-link:hover {
     background: #2a2b30;
     border-color: #444;
     color: #eee;
+  }
+  .tabbar {
+    border-bottom-color: #333;
+  }
+  .tab-btn {
+    color: #aaa;
+  }
+  .tab-btn:hover,
+  .tab-btn.active {
+    color: #eee;
+  }
+  .tab-btn.active::after {
+    background: #93c5fd;
+  }
+  .opname-date-group {
+    border-color: #333;
+  }
+  .opname-date-header {
+    background: #26272b;
+    border-bottom-color: #333;
   }
 }

@@ -87,16 +87,30 @@
     <section class="view" id="view-opname" hidden>
       <main class="card">
         <h2>Stock Opname</h2>
-        <p class="subtitle">Today's stock count checklist. Active items are automatically split across every work day of the year (Sundays and tanggal merah excluded) — anything left unchecked stays on the list and more is added the next work day.</p>
+        <p class="subtitle">Stock count checklist. Active items are automatically split across every work day of the year (Sundays and tanggal merah excluded) — anything left unchecked stays on the list and more is added the next work day.</p>
 
-        <div class="toolbar">
-          <button type="button" class="secondary" id="opname-select-all-btn">Select All</button>
-          <span id="opname-cycle-info" class="subtitle" style="margin-left:auto;"></span>
+        <div class="tabbar">
+          <button type="button" class="tab-btn active" data-opname-subview="checklist" id="opname-tab-checklist">Checklist</button>
+          <button type="button" class="tab-btn" data-opname-subview="logs" id="opname-tab-logs">Logs</button>
         </div>
         <p id="opname-message" class="message" hidden></p>
 
-        <div id="opname-list"></div>
-        <p id="opname-empty" class="empty-state" hidden>Nothing to count today — check back on the next work day.</p>
+        <!-- Checklist sub-view -->
+        <div id="opname-checklist-view">
+          <div class="toolbar">
+            <button type="button" class="secondary" id="opname-select-all-btn">Select All</button>
+            <button type="button" id="opname-mark-done-btn" disabled>Mark Selected Done</button>
+            <span id="opname-cycle-info" class="subtitle" style="margin-left:auto;"></span>
+          </div>
+          <div id="opname-groups"></div>
+          <p id="opname-empty" class="empty-state" hidden>Nothing to count today — check back on the next work day.</p>
+        </div>
+
+        <!-- Logs sub-view -->
+        <div id="opname-logs-view" hidden>
+          <div id="opname-logs-groups"></div>
+          <p id="opname-logs-empty" class="empty-state" hidden>No completed items yet.</p>
+        </div>
       </main>
     </section>
 
@@ -154,6 +168,8 @@
       </div>
     </div>
   </div>
+
+  <div class="toast-container" id="toast-container"></div>
 
   <script src="/app.js"></script>
 </body>
