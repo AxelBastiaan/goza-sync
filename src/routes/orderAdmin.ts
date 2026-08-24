@@ -254,6 +254,50 @@ router.get("/shopee/webhook-config", async (_req: Request, res: Response) => {
   }
 });
 
+// Repoints Shopee's Live Push callback_url to our own SHOPEE_WEBHOOK_URL — fixes
+// exactly the gap /shopee/webhook-config found live: Shopee had been faithfully
+// firing every order event at a now-dead ngrok tunnel from before this app moved
+// to the VPS, so none of it ever reached us. Re-reads the current push_config
+// first and resubmits it byte-for-byte except callback_url, so none of the
+// other already-enabled event subscriptions (shop authorization, item
+// promotion, etc.) get silently dropped by only sending a partial config.
+router.post("/shopee/webhook-config/fix", async (_req: Request, res: Response) => {
+  if (!SHOPEE_WEBHOOK_URL) {
+    return res.status(400).json({ error: "SHOPEE_WEBHOOK_URL is not set" });
+  }
+
+  try {
+    const currentResponse = await callShopeeApi("GET", "/api/v2/push/get_push_config", {});
+    if (currentResponse.data?.error) {
+      return res.status(502).json({ error: `get_push_config failed: ${currentResponse.data.error}: ${currentResponse.data.message}` });
+    }
+    const current = currentResponse.data;
+
+    if (current.callback_url === SHOPEE_WEBHOOK_URL) {
+      return res.json({ alreadyCorrect: true, callback_url: current.callback_url });
+    }
+
+    const setResponse = await callShopeeApi(
+      "POST",
+      "/api/v2/push/set_push_config",
+      {},
+      {
+        callback_url: SHOPEE_WEBHOOK_URL,
+        push_config: current.push_config,
+      }
+    );
+
+    if (setResponse.data?.error) {
+      return res.status(502).json({ error: `set_push_config failed: ${setResponse.data.error}: ${setResponse.data.message}`, previousCallbackUrl: current.callback_url });
+    }
+
+    console.log(`[orderAdmin] Shopee callback_url updated from ${current.callback_url} to ${SHOPEE_WEBHOOK_URL}`);
+    res.json({ updated: true, previousCallbackUrl: current.callback_url, newCallbackUrl: SHOPEE_WEBHOOK_URL, response: setResponse.data });
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message ?? "Failed to reach Shopee" });
+  }
+});
+
 // Read-only census of every order this app has ever recorded, grouped by
 // status. `docker compose logs` only goes back to the current container's last
 // start — a redeploy discards everything before it — so log-grepping badly
