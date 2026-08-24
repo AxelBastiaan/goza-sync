@@ -192,7 +192,8 @@ router.post("/tiktok/bulk-delete-so-do", async (req: Request, res: Response) => 
 // signature verification, a Partner Center subscription gap, etc). This settles
 // which one it is against Shopee's own source of truth.
 router.get("/shopee/recent-orders", async (req: Request, res: Response) => {
-  const days = Number(req.query.days) || 30;
+  // Shopee's own API caps this range at 15 days.
+  const days = Math.min(Number(req.query.days) || 15, 15);
 
   const stores = getShopeeStores();
   if (stores.length !== 1) {
@@ -208,11 +209,13 @@ router.get("/shopee/recent-orders", async (req: Request, res: Response) => {
       "GET",
       "/api/v2/order/get_order_list",
       {
+        // order_status is optional per Shopee's doc and returns every status when
+        // omitted — "ALL" is not itself a valid enum value (confirmed live: Shopee
+        // rejected it with error_param).
         time_range_field: "create_time",
         time_from: timeFrom,
         time_to: timeTo,
         page_size: 100,
-        order_status: "ALL",
       },
       null,
       credentials
