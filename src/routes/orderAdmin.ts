@@ -2,8 +2,9 @@ import { Router, Request, Response } from "express";
 import { db } from "../db";
 import { getOrderLineItems, getOrderStatus } from "../services/tiktokOrders";
 import { createDeliveryOrder, createSalesInvoice } from "../services/accurateSalesFlow";
-import { getTikTokStores } from "../services/storesRepo";
+import { getTikTokStores, getShopeeStores } from "../services/storesRepo";
 import { callAccurateApi } from "../services/accurateClient";
+import { callShopeeApi } from "../services/shopeeClient";
 
 const router = Router();
 
@@ -182,6 +183,54 @@ router.post("/tiktok/bulk-delete-so-do", async (req: Request, res: Response) => 
   }
 
   res.json(results);
+});
+
+// Read-only: asks Shopee directly for its real order volume in a date range,
+// bypassing our webhook pipeline entirely. shopee_orders being empty is
+// ambiguous on its own -- it means either Shopee genuinely has no orders yet,
+// or orders exist but the webhook never reached/registered with us (unconfirmed
+// signature verification, a Partner Center subscription gap, etc). This settles
+// which one it is against Shopee's own source of truth.
+router.get("/shopee/recent-orders", async (req: Request, res: Response) => {
+  const days = Number(req.query.days) || 30;
+
+  const stores = getShopeeStores();
+  if (stores.length !== 1) {
+    return res.status(400).json({ error: `Expected exactly one connected Shopee store, found ${stores.length}` });
+  }
+  const credentials = stores[0].credentials;
+
+  const timeTo = Math.floor(Date.now() / 1000);
+  const timeFrom = timeTo - days * 24 * 60 * 60;
+
+  try {
+    const response = await callShopeeApi(
+      "GET",
+      "/api/v2/order/get_order_list",
+      {
+        time_range_field: "create_time",
+        time_from: timeFrom,
+        time_to: timeTo,
+        page_size: 100,
+        order_status: "ALL",
+      },
+      null,
+      credentials
+    );
+
+    if (response.data?.error) {
+      return res.status(502).json({ error: `${response.data.error}: ${response.data.message}` });
+    }
+
+    const orders = response.data?.response?.order_list ?? [];
+    res.json({
+      daysChecked: days,
+      totalFromShopee: response.data?.response?.more ? `${orders.length}+ (more pages exist)` : orders.length,
+      orders,
+    });
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message ?? "Failed to reach Shopee" });
+  }
 });
 
 // Read-only census of every order this app has ever recorded, grouped by
