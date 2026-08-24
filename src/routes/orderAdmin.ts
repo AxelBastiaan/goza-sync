@@ -86,6 +86,28 @@ router.post("/tiktok/:orderId/catchup", async (req: Request, res: Response) => {
   }
 });
 
+// Read-only census of every order this app has ever recorded, grouped by
+// status. `docker compose logs` only goes back to the current container's last
+// start — a redeploy discards everything before it — so log-grepping badly
+// undercounts how many orders are actually stuck; these tables persist across
+// deploys and are the real source of truth for that.
+router.get("/status-summary", (_req: Request, res: Response) => {
+  const tiktokByStatus = db.prepare("SELECT status, COUNT(*) as count FROM tiktok_orders GROUP BY status").all();
+  const tiktokStuck = db
+    .prepare("SELECT order_id, sales_order_id, delivery_order_id, sales_invoice_id, status, created_at FROM tiktok_orders WHERE status IN ('created', 'shipped') ORDER BY created_at")
+    .all();
+
+  const shopeeByStatus = db.prepare("SELECT status, COUNT(*) as count FROM shopee_orders GROUP BY status").all();
+  const shopeeStuck = db
+    .prepare("SELECT order_sn, sales_order_id, delivery_order_id, sales_invoice_id, status, created_at FROM shopee_orders WHERE status IN ('created', 'shipped') ORDER BY created_at")
+    .all();
+
+  res.json({
+    tiktok: { byStatus: tiktokByStatus, stuck: tiktokStuck },
+    shopee: { byStatus: shopeeByStatus, stuck: shopeeStuck },
+  });
+});
+
 // Read-only diagnostic: looks up whether a document with this exact `number`
 // already exists in Accurate. Sales Invoice's `number` and Sales Order's
 // `poNumber` share one uniqueness space in Accurate (confirmed live in
