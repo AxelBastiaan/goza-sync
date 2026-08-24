@@ -1,7 +1,8 @@
 import { Router, Request, Response } from "express";
 import { db } from "../db";
 import { getOrderLineItems, getOrderStatus } from "../services/tiktokOrders";
-import { createDeliveryOrder, createSalesInvoice } from "../services/accurateSalesFlow";
+import { getShopeeOrderLineItems, getShopeeOrderSummaries } from "../services/shopeeOrders";
+import { createSalesOrder, createDeliveryOrder, createSalesInvoice, getShopeeCustomerId } from "../services/accurateSalesFlow";
 import { getTikTokStores, getShopeeStores } from "../services/storesRepo";
 import { callAccurateApi } from "../services/accurateClient";
 import { callShopeeApi, WEBHOOK_URL as SHOPEE_WEBHOOK_URL } from "../services/shopeeClient";
@@ -296,6 +297,192 @@ router.post("/shopee/webhook-config/fix", async (_req: Request, res: Response) =
   } catch (err: any) {
     res.status(502).json({ error: err?.message ?? "Failed to reach Shopee" });
   }
+});
+
+// Shopee's real order_status enum mapped to our stage model. CANCELLED/IN_CANCEL
+// are handled separately by the caller (nothing gets created in Accurate for an
+// order that's already dead). TO_RETURN and INVOICE_PENDING are deliberately
+// left unmapped (undefined) rather than guessed at — a return in progress or a
+// pending-invoice state needs a human call, not an automated push.
+function shopeeStatusToStage(orderStatus: string): OrderStatus | undefined {
+  switch (orderStatus) {
+    case "COMPLETED":
+      return "invoiced";
+    case "SHIPPED":
+    case "TO_CONFIRM_RECEIVE":
+      return "shipped";
+    case "READY_TO_SHIP":
+    case "PROCESSED":
+    case "UNPAID":
+      return "created";
+    case "CANCELLED":
+    case "IN_CANCEL":
+      return "cancelled";
+    default:
+      return undefined;
+  }
+}
+
+// Read-only: lists every Shopee order created on/after `since` (default the
+// 2026-08-19 automation cutover) with its real current status and the stage our
+// system would push it to — the reconciliation report for the webhook-callback
+// gap found and fixed via /shopee/webhook-config. Writes nothing; run
+// /shopee/bulk-backfill against the returned orderSns once reviewed.
+router.get("/shopee/orders-since", async (req: Request, res: Response) => {
+  const sinceStr = (req.query.since as string) || "2026-08-19";
+  const since = new Date(`${sinceStr}T00:00:00+07:00`); // Asia/Jakarta, matches the business's own timezone elsewhere in this app
+  if (Number.isNaN(since.getTime())) {
+    return res.status(400).json({ error: `Invalid since date "${sinceStr}"` });
+  }
+  const sinceEpoch = Math.floor(since.getTime() / 1000);
+
+  const stores = getShopeeStores();
+  if (stores.length !== 1) {
+    return res.status(400).json({ error: `Expected exactly one connected Shopee store, found ${stores.length}` });
+  }
+  const credentials = stores[0].credentials;
+
+  try {
+    // Shopee's get_order_list caps at 15 days; walk back in 15-day windows until
+    // we've covered everything back to `since` (or hit an empty page).
+    const timeTo = Math.floor(Date.now() / 1000);
+    const allOrderSns = new Set<string>();
+    let windowEnd = timeTo;
+    while (windowEnd > sinceEpoch) {
+      const windowStart = Math.max(sinceEpoch, windowEnd - 15 * 24 * 60 * 60);
+      const listResponse = await callShopeeApi(
+        "GET",
+        "/api/v2/order/get_order_list",
+        { time_range_field: "create_time", time_from: windowStart, time_to: windowEnd, page_size: 100 },
+        null,
+        credentials
+      );
+      if (listResponse.data?.error) {
+        return res.status(502).json({ error: `get_order_list failed: ${listResponse.data.error}: ${listResponse.data.message}` });
+      }
+      for (const o of listResponse.data?.response?.order_list ?? []) {
+        allOrderSns.add(o.order_sn);
+      }
+      windowEnd = windowStart;
+    }
+
+    const summaries = await getShopeeOrderSummaries([...allOrderSns], credentials);
+    const inRange = summaries.filter((o) => o.createTime >= sinceEpoch);
+
+    const alreadyOnFile = new Set(
+      (db.prepare("SELECT order_sn FROM shopee_orders").all() as { order_sn: string }[]).map((r) => r.order_sn)
+    );
+
+    const report = inRange.map((o) => ({
+      ...o,
+      createdAtJakarta: new Date(o.createTime * 1000).toLocaleString("en-US", { timeZone: "Asia/Jakarta" }),
+      targetStage: shopeeStatusToStage(o.orderStatus),
+      alreadyOnFile: alreadyOnFile.has(o.orderSn),
+    }));
+
+    res.json({
+      since: sinceStr,
+      totalInRange: report.length,
+      needsReview: report.filter((o) => !o.targetStage).length,
+      byTargetStage: {
+        created: report.filter((o) => o.targetStage === "created").length,
+        shipped: report.filter((o) => o.targetStage === "shipped").length,
+        invoiced: report.filter((o) => o.targetStage === "invoiced").length,
+        cancelled: report.filter((o) => o.targetStage === "cancelled").length,
+        unrecognizedStatus: report.filter((o) => !o.targetStage).length,
+      },
+      orders: report,
+    });
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message ?? "Failed to reach Shopee" });
+  }
+});
+
+// Pushes a batch of Shopee orders through the same Sales Order -> Delivery Order
+// -> Sales Invoice progression the webhook handler would have, using each
+// order's real current status (not a webhook payload, since none ever arrived —
+// see /shopee/orders-since). Orders already CANCELLED are skipped without
+// writing anything to Accurate (closing something that was never opened serves
+// no purpose); orders with no recognized target stage (TO_RETURN,
+// INVOICE_PENDING, etc.) are skipped for manual review. Every other order gets
+// its Sales Order created, then progresses through Delivery Order/Sales Invoice
+// as far as its real status implies. Each order is fully independent — one
+// failure doesn't stop or corrupt the rest of the batch.
+router.post("/shopee/bulk-backfill", async (req: Request, res: Response) => {
+  const orderSns = req.body?.orderSns as string[] | undefined;
+  if (!Array.isArray(orderSns) || orderSns.length === 0) {
+    return res.status(400).json({ error: "orderSns must be a non-empty array" });
+  }
+
+  const stores = getShopeeStores();
+  if (stores.length !== 1) {
+    return res.status(400).json({ error: `Expected exactly one connected Shopee store, found ${stores.length}` });
+  }
+  const credentials = stores[0].credentials;
+  const customerId = getShopeeCustomerId();
+
+  const summaries = await getShopeeOrderSummaries(orderSns, credentials);
+  const summaryBySn = new Map(summaries.map((s) => [s.orderSn, s]));
+
+  const results: { orderSn: string; skipped?: string; progress?: any; error?: string }[] = [];
+
+  for (const orderSn of orderSns) {
+    try {
+      const existing = db.prepare("SELECT 1 FROM shopee_orders WHERE order_sn = ?").get(orderSn);
+      if (existing) {
+        results.push({ orderSn, skipped: "Already on file" });
+        continue;
+      }
+
+      const summary = summaryBySn.get(orderSn);
+      if (!summary) {
+        results.push({ orderSn, error: "Could not fetch order status from Shopee" });
+        continue;
+      }
+
+      if (summary.orderStatus === "CANCELLED" || summary.orderStatus === "IN_CANCEL") {
+        results.push({ orderSn, skipped: `Order is ${summary.orderStatus} — nothing to push` });
+        continue;
+      }
+
+      const targetStage = shopeeStatusToStage(summary.orderStatus);
+      if (!targetStage) {
+        results.push({ orderSn, skipped: `Unrecognized status "${summary.orderStatus}" — needs manual review` });
+        continue;
+      }
+
+      const transDate = new Date(summary.createTime * 1000);
+      const lineItems = await getShopeeOrderLineItems(orderSn, credentials);
+      if (lineItems.length === 0) {
+        results.push({ orderSn, error: "No mapped line items found for this order" });
+        continue;
+      }
+
+      const { salesOrderId } = await createSalesOrder(orderSn, lineItems, customerId, transDate);
+      let deliveryOrderId: number | null = null;
+      let salesInvoiceId: number | null = null;
+
+      if (STAGE_ORDER.indexOf(targetStage) >= STAGE_ORDER.indexOf("shipped")) {
+        deliveryOrderId = await createDeliveryOrder(salesOrderId, lineItems, customerId, transDate);
+      }
+      if (targetStage === "invoiced" && deliveryOrderId !== null) {
+        salesInvoiceId = await createSalesInvoice(orderSn, salesOrderId, deliveryOrderId, lineItems, customerId, transDate);
+      }
+
+      const finalStatus: OrderStatus = salesInvoiceId ? "invoiced" : deliveryOrderId ? "shipped" : "created";
+      db.prepare(
+        "INSERT INTO shopee_orders (order_sn, sales_order_id, delivery_order_id, sales_invoice_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+      ).run(orderSn, salesOrderId, deliveryOrderId, salesInvoiceId, finalStatus, transDate.toISOString());
+
+      console.log(`[orderAdmin] backfilled Shopee order ${orderSn}: SO ${salesOrderId}${deliveryOrderId ? `, DO ${deliveryOrderId}` : ""}${salesInvoiceId ? `, SI ${salesInvoiceId}` : ""}`);
+      results.push({ orderSn, progress: { salesOrderId, deliveryOrderId, salesInvoiceId, status: finalStatus } });
+    } catch (err: any) {
+      console.error(`[orderAdmin] backfill failed for Shopee order ${orderSn}:`, err?.message ?? err);
+      results.push({ orderSn, error: err?.message ?? String(err) });
+    }
+  }
+
+  res.json(results);
 });
 
 // Read-only census of every order this app has ever recorded, grouped by

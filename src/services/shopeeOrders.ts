@@ -1,6 +1,44 @@
 import { callShopeeApi, ShopeeStoreCredentials } from "./shopeeClient";
 import { OrderLineItem } from "./tiktokOrders";
 
+export interface ShopeeOrderSummary {
+  orderSn: string;
+  createTime: number;
+  orderStatus: string;
+}
+
+// Batch reads each order's real creation time + current status directly from
+// Shopee — used for reconciling a backlog of orders whose webhook events never
+// reached us (rather than one order_sn at a time via getShopeeOrderLineItems,
+// which also pulls full line items we don't need just to triage a list).
+// get_order_detail accepts at most 50 order_sn per call.
+export async function getShopeeOrderSummaries(orderSns: string[], credentials: ShopeeStoreCredentials): Promise<ShopeeOrderSummary[]> {
+  const results: ShopeeOrderSummary[] = [];
+
+  for (let i = 0; i < orderSns.length; i += 50) {
+    const chunk = orderSns.slice(i, i + 50);
+    const response = await callShopeeApi(
+      "GET",
+      "/api/v2/order/get_order_detail",
+      { order_sn_list: chunk.join(","), response_optional_fields: "create_time,order_status" },
+      null,
+      credentials
+    );
+
+    if (response.data?.error) {
+      console.warn(`[shopeeOrders] get_order_detail batch failed: ${response.data.error}: ${response.data.message}`);
+      continue;
+    }
+
+    const orders = response.data?.response?.order_list ?? [];
+    for (const o of orders) {
+      results.push({ orderSn: o.order_sn, createTime: o.create_time, orderStatus: o.order_status });
+    }
+  }
+
+  return results;
+}
+
 // Confirmed live against a real order (26073025T0NA83): item_list entries carry
 // model_sku (the seller-set variant SKU — matches what shopeeStockSync.ts already
 // keys stock updates on) plus model_discounted_price/model_original_price.
