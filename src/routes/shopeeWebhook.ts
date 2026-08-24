@@ -46,6 +46,24 @@ function updateOrderRow(orderSn: string, fields: Partial<Pick<ShopeeOrderRow, "d
   db.prepare(`UPDATE shopee_orders SET ${sets} WHERE order_sn = @order_sn`).run({ order_sn: orderSn, ...fields });
 }
 
+const STAGE_ORDER: OrderStatus[] = ["created", "shipped", "invoiced"];
+
+// Mirrors tiktokWebhook.ts's impliedStage() — Shopee doesn't guarantee every push
+// type fires for every order (a tracking-number push can be missed, or the order
+// can already be COMPLETED the first time we ever see it), so treat the incoming
+// event as implying a target stage and catch up through everything in between
+// instead of requiring one exact transition.
+function impliedStage(pushCode: number, orderStatus: string | undefined): OrderStatus | undefined {
+  if (pushCode === CODE_ORDER_TRACKINGNO) {
+    return "shipped";
+  }
+  if (pushCode === CODE_ORDER_STATUS) {
+    if (orderStatus === "COMPLETED") return "invoiced";
+    if (orderStatus === "CANCELLED" || orderStatus === "IN_CANCEL") return "cancelled";
+  }
+  return undefined;
+}
+
 function getAffectedAccurateSkus(lineItems: OrderLineItem[]): string[] {
   return lineItems
     .map((line) => getMappingForMarketplaceSku(line.sellerSku)?.accurateSku)
@@ -141,27 +159,38 @@ router.post("/", async (req: Request, res: Response) => {
 
     const orderStatus = req.body?.data?.status as string | undefined;
 
-    if (code === CODE_ORDER_TRACKINGNO && row.status === "created") {
-      lineItems = lineItems ?? (await getShopeeOrderLineItems(orderSn, credentials));
-      const deliveryOrderId = await createDeliveryOrder(row.sales_order_id!, lineItems, customerId);
-      updateOrderRow(orderSn, { delivery_order_id: deliveryOrderId, status: "shipped" });
-      console.log(`[shopeeWebhook] created Delivery Order ${deliveryOrderId} for order ${orderSn} (SO ${row.sales_order_id})`);
+    const target = impliedStage(code, orderStatus);
 
-      await pushUpdatedStockFor(getAffectedAccurateSkus(lineItems));
-    } else if (code === CODE_ORDER_STATUS && row.status === "shipped" && orderStatus === "COMPLETED") {
-      lineItems = lineItems ?? (await getShopeeOrderLineItems(orderSn, credentials));
-      const salesInvoiceId = await createSalesInvoice(orderSn, row.sales_order_id!, row.delivery_order_id!, lineItems, customerId);
-      updateOrderRow(orderSn, { sales_invoice_id: salesInvoiceId, status: "invoiced" });
-      console.log(`[shopeeWebhook] created Sales Invoice ${salesInvoiceId} for order ${orderSn}`);
-    } else if (code === CODE_ORDER_STATUS && (row.status === "created" || row.status === "shipped") && (orderStatus === "CANCELLED" || orderStatus === "IN_CANCEL")) {
-      lineItems = lineItems ?? (await getShopeeOrderLineItems(orderSn, credentials));
-      const affectedSkus = getAffectedAccurateSkus(lineItems);
+    if (target === "cancelled") {
+      if (row.status === "created" || row.status === "shipped") {
+        lineItems = lineItems ?? (await getShopeeOrderLineItems(orderSn, credentials));
+        const affectedSkus = getAffectedAccurateSkus(lineItems);
 
-      await cancelOrder(row.sales_order_id!, row.delivery_order_id);
-      updateOrderRow(orderSn, { status: "cancelled" });
-      console.log(`[shopeeWebhook] cancelled order ${orderSn} (SO ${row.sales_order_id}, DO ${row.delivery_order_id ?? "none"})`);
+        await cancelOrder(row.sales_order_id!, row.delivery_order_id);
+        updateOrderRow(orderSn, { status: "cancelled" });
+        console.log(`[shopeeWebhook] cancelled order ${orderSn} (SO ${row.sales_order_id}, DO ${row.delivery_order_id ?? "none"})`);
 
-      await pushUpdatedStockFor(affectedSkus);
+        await pushUpdatedStockFor(affectedSkus);
+      } else {
+        console.log(`[shopeeWebhook] no action for order ${orderSn}: current status "${row.status}", incoming code ${code}, order_status "${orderStatus}"`);
+      }
+    } else if (target && row.status !== "cancelled" && STAGE_ORDER.indexOf(target) > STAGE_ORDER.indexOf(row.status)) {
+      lineItems = lineItems ?? (await getShopeeOrderLineItems(orderSn, credentials));
+
+      if (row.status === "created") {
+        const deliveryOrderId = await createDeliveryOrder(row.sales_order_id!, lineItems, customerId);
+        updateOrderRow(orderSn, { delivery_order_id: deliveryOrderId, status: "shipped" });
+        row = { ...row, delivery_order_id: deliveryOrderId, status: "shipped" };
+        console.log(`[shopeeWebhook] created Delivery Order ${deliveryOrderId} for order ${orderSn} (SO ${row.sales_order_id})`);
+
+        await pushUpdatedStockFor(getAffectedAccurateSkus(lineItems));
+      }
+
+      if (target === "invoiced" && row.status === "shipped") {
+        const salesInvoiceId = await createSalesInvoice(orderSn, row.sales_order_id!, row.delivery_order_id!, lineItems, customerId);
+        updateOrderRow(orderSn, { sales_invoice_id: salesInvoiceId, status: "invoiced" });
+        console.log(`[shopeeWebhook] created Sales Invoice ${salesInvoiceId} for order ${orderSn}`);
+      }
     } else {
       console.log(`[shopeeWebhook] no action for order ${orderSn}: current status "${row.status}", incoming code ${code}, order_status "${orderStatus}"`);
     }

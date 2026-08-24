@@ -56,6 +56,32 @@ function updateOrderRow(orderId: string, fields: Partial<Pick<TikTokOrderRow, "d
   db.prepare(`UPDATE tiktok_orders SET ${sets} WHERE order_id = @order_id`).run({ order_id: orderId, ...fields });
 }
 
+const STAGE_ORDER: OrderStatus[] = ["created", "shipped", "invoiced"];
+
+// TikTok's webhook delivery isn't guaranteed to hit every intermediate status for
+// every order — confirmed live: several orders' very first webhook event already
+// reported IN_TRANSIT, DELIVERED, or COMPLETED, with no AWAITING_COLLECTION event
+// ever received first. Reacting only to one exact transition (created ->
+// AWAITING_COLLECTION, shipped -> DELIVERED) left those orders stuck with just a
+// Sales Order forever, since TikTok never re-sends a status it already reported.
+// Treating the incoming status as implying a target stage, and catching up
+// through everything in between, fixes that regardless of which event arrives
+// first or whether one gets missed.
+function impliedStage(orderStatus: string | undefined): OrderStatus | undefined {
+  switch (orderStatus) {
+    case "DELIVERED":
+    case "COMPLETED":
+      return "invoiced";
+    case "AWAITING_COLLECTION":
+    case "IN_TRANSIT":
+      return "shipped";
+    case "CANCELLED":
+      return "cancelled";
+    default:
+      return undefined;
+  }
+}
+
 // Resolves which Accurate SKUs an order's line items actually correspond to, via the
 // existing marketplace-SKU mappings — used wherever we need to re-push stock for an
 // order but don't already have its resolved Accurate SKUs on hand.
@@ -148,34 +174,48 @@ router.post("/", async (req: Request, res: Response) => {
       await pushUpdatedStockFor(detailItems.map((d) => d.itemNo));
     }
 
-    if (row.status === "created" && orderStatus === "AWAITING_COLLECTION") {
-      lineItems = lineItems ?? (await getOrderLineItems(orderId, credentials));
-      const deliveryOrderId = await createDeliveryOrder(row.sales_order_id!, lineItems);
-      updateOrderRow(orderId, { delivery_order_id: deliveryOrderId, status: "shipped" });
-      console.log(`[tiktokWebhook] created Delivery Order ${deliveryOrderId} for order ${orderId} (SO ${row.sales_order_id})`);
+    const target = impliedStage(orderStatus);
 
-      // Physical stock has now actually decremented too — re-push so every store's
-      // number reflects it (availableToSell already accounted for the Sales Order
-      // stage, so this mainly matters if the on-hand/gudang figure is surfaced
-      // anywhere, and keeps behavior consistent regardless).
-      await pushUpdatedStockFor(getAffectedAccurateSkus(lineItems));
-    } else if (row.status === "shipped" && orderStatus === "DELIVERED") {
-      lineItems = lineItems ?? (await getOrderLineItems(orderId, credentials));
-      const salesInvoiceId = await createSalesInvoice(orderId, row.sales_order_id!, row.delivery_order_id!, lineItems);
-      updateOrderRow(orderId, { sales_invoice_id: salesInvoiceId, status: "invoiced" });
-      console.log(`[tiktokWebhook] created Sales Invoice ${salesInvoiceId} for order ${orderId}`);
-    } else if ((row.status === "created" || row.status === "shipped") && orderStatus === "CANCELLED") {
-      lineItems = lineItems ?? (await getOrderLineItems(orderId, credentials));
-      const affectedSkus = getAffectedAccurateSkus(lineItems);
+    if (target === "cancelled") {
+      if (row.status === "created" || row.status === "shipped") {
+        lineItems = lineItems ?? (await getOrderLineItems(orderId, credentials));
+        const affectedSkus = getAffectedAccurateSkus(lineItems);
 
-      await cancelOrder(row.sales_order_id!, row.delivery_order_id);
-      updateOrderRow(orderId, { status: "cancelled" });
-      console.log(`[tiktokWebhook] cancelled order ${orderId} (SO ${row.sales_order_id}, DO ${row.delivery_order_id ?? "none"})`);
+        await cancelOrder(row.sales_order_id!, row.delivery_order_id);
+        updateOrderRow(orderId, { status: "cancelled" });
+        console.log(`[tiktokWebhook] cancelled order ${orderId} (SO ${row.sales_order_id}, DO ${row.delivery_order_id ?? "none"})`);
 
-      // cancelOrder() closes the Sales Order (and reverses the Delivery Order's
-      // stock decrement if one existed) — Accurate's availableToSell reflects that
-      // immediately, so just re-push to every store.
-      await pushUpdatedStockFor(affectedSkus);
+        // cancelOrder() closes the Sales Order (and reverses the Delivery Order's
+        // stock decrement if one existed) — Accurate's availableToSell reflects that
+        // immediately, so just re-push to every store.
+        await pushUpdatedStockFor(affectedSkus);
+      } else {
+        console.log(`[tiktokWebhook] no action for order ${orderId}: current status "${row.status}", incoming order_status "${orderStatus}"`);
+      }
+    } else if (target && row.status !== "cancelled" && STAGE_ORDER.indexOf(target) > STAGE_ORDER.indexOf(row.status)) {
+      // Catches up through every stage between the current one and the stage the
+      // incoming status implies, rather than requiring one exact transition — see
+      // impliedStage()'s comment for why.
+      lineItems = lineItems ?? (await getOrderLineItems(orderId, credentials));
+
+      if (row.status === "created") {
+        const deliveryOrderId = await createDeliveryOrder(row.sales_order_id!, lineItems);
+        updateOrderRow(orderId, { delivery_order_id: deliveryOrderId, status: "shipped" });
+        row = { ...row, delivery_order_id: deliveryOrderId, status: "shipped" };
+        console.log(`[tiktokWebhook] created Delivery Order ${deliveryOrderId} for order ${orderId} (SO ${row.sales_order_id})`);
+
+        // Physical stock has now actually decremented too — re-push so every store's
+        // number reflects it (availableToSell already accounted for the Sales Order
+        // stage, so this mainly matters if the on-hand/gudang figure is surfaced
+        // anywhere, and keeps behavior consistent regardless).
+        await pushUpdatedStockFor(getAffectedAccurateSkus(lineItems));
+      }
+
+      if (target === "invoiced" && row.status === "shipped") {
+        const salesInvoiceId = await createSalesInvoice(orderId, row.sales_order_id!, row.delivery_order_id!, lineItems);
+        updateOrderRow(orderId, { sales_invoice_id: salesInvoiceId, status: "invoiced" });
+        console.log(`[tiktokWebhook] created Sales Invoice ${salesInvoiceId} for order ${orderId}`);
+      }
     } else {
       console.log(`[tiktokWebhook] no action for order ${orderId}: current status "${row.status}", incoming order_status "${orderStatus}"`);
     }

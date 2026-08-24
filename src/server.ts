@@ -18,6 +18,7 @@ import settingsRouter from "./routes/settings";
 import storesRouter from "./routes/stores";
 import integrationsRouter from "./routes/integrations";
 import importRouter from "./routes/import";
+import orderAdminRouter from "./routes/orderAdmin";
 import { renewAccurateWebhook } from "./services/accurateWebhookRenewal";
 import { renewAllShopeeStores } from "./services/shopeeAuth";
 import { renewAllTikTokStores } from "./services/tiktokAuth";
@@ -85,6 +86,7 @@ app.use("/api/settings", requireAuth, settingsRouter);
 app.use("/api/stores", requireAuth, storesRouter);
 app.use("/api/integrations", requireAuth, integrationsRouter);
 app.use("/api/import", requireAuth, importRouter);
+app.use("/api/order-admin", requireAuth, orderAdminRouter);
 
 const PORT = Number(getEnv("PORT") || 8000);
 
