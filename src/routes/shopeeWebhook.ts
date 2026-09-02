@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { db } from "../db";
-import { getShopeeOrderLineItems } from "../services/shopeeOrders";
+import { getShopeeOrderDetail, ShopeeOrderDetail } from "../services/shopeeOrders";
 import { OrderLineItem } from "../services/tiktokOrders";
 import { createSalesOrder, createDeliveryOrder, createSalesInvoice, cancelOrder, getShopeeCustomerId } from "../services/accurateSalesFlow";
 import { verifyShopeeWebhookSignature } from "../services/shopeeClient";
@@ -145,11 +145,13 @@ router.post("/", async (req: Request, res: Response) => {
 
   try {
     let row = getOrderRow(orderSn);
-    let lineItems: OrderLineItem[] | undefined;
+    // Dates every Accurate document below from the order's own placement time
+    // rather than this webhook's arrival time — see ShopeeOrderDetail.createdAt.
+    let detail: ShopeeOrderDetail | undefined;
 
     if (!row) {
-      lineItems = await getShopeeOrderLineItems(orderSn, credentials);
-      const { salesOrderId, detailItems } = await createSalesOrder(orderSn, lineItems, customerId);
+      detail = await getShopeeOrderDetail(orderSn, credentials);
+      const { salesOrderId, detailItems } = await createSalesOrder(orderSn, detail.lineItems, customerId, detail.createdAt);
       insertOrderRow(orderSn, salesOrderId);
       row = getOrderRow(orderSn)!;
       console.log(`[shopeeWebhook] created Sales Order ${salesOrderId} for order ${orderSn} (store: ${store.name})`);
@@ -163,8 +165,8 @@ router.post("/", async (req: Request, res: Response) => {
 
     if (target === "cancelled") {
       if (row.status === "created" || row.status === "shipped") {
-        lineItems = lineItems ?? (await getShopeeOrderLineItems(orderSn, credentials));
-        const affectedSkus = getAffectedAccurateSkus(lineItems);
+        detail = detail ?? (await getShopeeOrderDetail(orderSn, credentials));
+        const affectedSkus = getAffectedAccurateSkus(detail.lineItems);
 
         await cancelOrder(row.sales_order_id!, row.delivery_order_id);
         updateOrderRow(orderSn, { status: "cancelled" });
@@ -175,19 +177,19 @@ router.post("/", async (req: Request, res: Response) => {
         console.log(`[shopeeWebhook] no action for order ${orderSn}: current status "${row.status}", incoming code ${code}, order_status "${orderStatus}"`);
       }
     } else if (target && row.status !== "cancelled" && STAGE_ORDER.indexOf(target) > STAGE_ORDER.indexOf(row.status)) {
-      lineItems = lineItems ?? (await getShopeeOrderLineItems(orderSn, credentials));
+      detail = detail ?? (await getShopeeOrderDetail(orderSn, credentials));
 
       if (row.status === "created") {
-        const deliveryOrderId = await createDeliveryOrder(row.sales_order_id!, lineItems, customerId);
+        const deliveryOrderId = await createDeliveryOrder(orderSn, row.sales_order_id!, detail.lineItems, customerId, detail.createdAt);
         updateOrderRow(orderSn, { delivery_order_id: deliveryOrderId, status: "shipped" });
         row = { ...row, delivery_order_id: deliveryOrderId, status: "shipped" };
         console.log(`[shopeeWebhook] created Delivery Order ${deliveryOrderId} for order ${orderSn} (SO ${row.sales_order_id})`);
 
-        await pushUpdatedStockFor(getAffectedAccurateSkus(lineItems));
+        await pushUpdatedStockFor(getAffectedAccurateSkus(detail.lineItems));
       }
 
       if (target === "invoiced" && row.status === "shipped") {
-        const salesInvoiceId = await createSalesInvoice(orderSn, row.sales_order_id!, row.delivery_order_id!, lineItems, customerId);
+        const salesInvoiceId = await createSalesInvoice(orderSn, row.sales_order_id!, row.delivery_order_id!, detail.lineItems, customerId, detail.createdAt);
         updateOrderRow(orderSn, { sales_invoice_id: salesInvoiceId, status: "invoiced" });
         console.log(`[shopeeWebhook] created Sales Invoice ${salesInvoiceId} for order ${orderSn}`);
       }

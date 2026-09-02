@@ -12,6 +12,7 @@
     <div class="nav-item active" data-view="mapping"><span class="nav-icon">📦</span> Product Mapping</div>
     <div class="nav-item" data-view="integrations"><span class="nav-icon">🔌</span> Integrations</div>
     <div class="nav-item" data-view="import"><span class="nav-icon">⬇️</span> Import</div>
+    <div class="nav-item" data-view="recall"><span class="nav-icon">📋</span> Sales Recall</div>
     <div class="nav-item" data-view="opname"><span class="nav-icon">🧮</span> Stock Opname</div>
     <div class="nav-item" data-view="settings"><span class="nav-icon">⚙️</span> Settings</div>
     <div class="nav-item" id="logout-btn" style="margin-top:auto;"><span class="nav-icon">🚪</span> Log out</div>
@@ -80,6 +81,27 @@
         </table>
 
         <button type="button" id="import-commit-btn" style="margin-top:1rem;" hidden>Import 0 selected</button>
+      </main>
+    </section>
+
+    <!-- ============ Sales Recall view ============ -->
+    <section class="view" id="view-recall" hidden>
+      <main class="card">
+        <h2>Sales Recall</h2>
+        <p class="subtitle">Generate the latest customer recall letters and per-salesperson to-do lists from Accurate purchase history. This can take a few minutes.</p>
+
+        <div class="toolbar">
+          <button type="button" id="recall-generate-btn">Generate Recall Files</button>
+        </div>
+        <p id="recall-message" class="message" hidden></p>
+        <pre id="recall-log" class="recall-log" hidden></pre>
+
+        <hr />
+
+        <h2 style="font-size:1.1rem;">Download</h2>
+        <p class="subtitle">One zip per salesperson (recall letters + to-do list PDF).</p>
+        <div id="recall-files-list"></div>
+        <p id="recall-files-empty" class="empty-state" hidden>No files generated yet — click "Generate Recall Files" above.</p>
       </main>
     </section>
 

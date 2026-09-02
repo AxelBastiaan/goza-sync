@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import { db } from "../db";
-import { getOrderLineItems, OrderLineItem } from "../services/tiktokOrders";
+import { getOrderDetail, TikTokOrderDetail, OrderLineItem } from "../services/tiktokOrders";
 import { createSalesOrder, createDeliveryOrder, createSalesInvoice, cancelOrder } from "../services/accurateSalesFlow";
 import { verifyWebhookSignature } from "../services/tiktokClient";
 import { isLiveMode } from "../services/settings";
@@ -159,11 +159,17 @@ router.post("/", async (req: Request, res: Response) => {
 
   try {
     let row = getOrderRow(orderId);
-    let lineItems: OrderLineItem[] | undefined;
+    // Carries the order's real placement date alongside its line items — every
+    // Accurate document below is dated from it (see TikTokOrderDetail.createdAt),
+    // so a DELIVERED event arriving a week after the sale still books the sale on
+    // the day it happened. Passing undefined leaves accurateSalesFlow's own
+    // `new Date()` default in place, so a missing create_time degrades to the
+    // previous behavior rather than failing.
+    let detail: TikTokOrderDetail | undefined;
 
     if (!row) {
-      lineItems = await getOrderLineItems(orderId, credentials);
-      const { salesOrderId, detailItems } = await createSalesOrder(orderId, lineItems);
+      detail = await getOrderDetail(orderId, credentials);
+      const { salesOrderId, detailItems } = await createSalesOrder(orderId, detail.lineItems, undefined, detail.createdAt);
       insertOrderRow(orderId, salesOrderId);
       row = getOrderRow(orderId)!;
       console.log(`[tiktokWebhook] created Sales Order ${salesOrderId} for order ${orderId} (store: ${store.name})`);
@@ -178,8 +184,8 @@ router.post("/", async (req: Request, res: Response) => {
 
     if (target === "cancelled") {
       if (row.status === "created" || row.status === "shipped") {
-        lineItems = lineItems ?? (await getOrderLineItems(orderId, credentials));
-        const affectedSkus = getAffectedAccurateSkus(lineItems);
+        detail = detail ?? (await getOrderDetail(orderId, credentials));
+        const affectedSkus = getAffectedAccurateSkus(detail.lineItems);
 
         await cancelOrder(row.sales_order_id!, row.delivery_order_id);
         updateOrderRow(orderId, { status: "cancelled" });
@@ -196,10 +202,10 @@ router.post("/", async (req: Request, res: Response) => {
       // Catches up through every stage between the current one and the stage the
       // incoming status implies, rather than requiring one exact transition — see
       // impliedStage()'s comment for why.
-      lineItems = lineItems ?? (await getOrderLineItems(orderId, credentials));
+      detail = detail ?? (await getOrderDetail(orderId, credentials));
 
       if (row.status === "created") {
-        const deliveryOrderId = await createDeliveryOrder(row.sales_order_id!, lineItems);
+        const deliveryOrderId = await createDeliveryOrder(orderId, row.sales_order_id!, detail.lineItems, undefined, detail.createdAt);
         updateOrderRow(orderId, { delivery_order_id: deliveryOrderId, status: "shipped" });
         row = { ...row, delivery_order_id: deliveryOrderId, status: "shipped" };
         console.log(`[tiktokWebhook] created Delivery Order ${deliveryOrderId} for order ${orderId} (SO ${row.sales_order_id})`);
@@ -208,11 +214,11 @@ router.post("/", async (req: Request, res: Response) => {
         // number reflects it (availableToSell already accounted for the Sales Order
         // stage, so this mainly matters if the on-hand/gudang figure is surfaced
         // anywhere, and keeps behavior consistent regardless).
-        await pushUpdatedStockFor(getAffectedAccurateSkus(lineItems));
+        await pushUpdatedStockFor(getAffectedAccurateSkus(detail.lineItems));
       }
 
       if (target === "invoiced" && row.status === "shipped") {
-        const salesInvoiceId = await createSalesInvoice(orderId, row.sales_order_id!, row.delivery_order_id!, lineItems);
+        const salesInvoiceId = await createSalesInvoice(orderId, row.sales_order_id!, row.delivery_order_id!, detail.lineItems, undefined, detail.createdAt);
         updateOrderRow(orderId, { sales_invoice_id: salesInvoiceId, status: "invoiced" });
         console.log(`[tiktokWebhook] created Sales Invoice ${salesInvoiceId} for order ${orderId}`);
       }

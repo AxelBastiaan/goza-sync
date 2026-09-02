@@ -68,7 +68,7 @@ router.post("/tiktok/:orderId/catchup", async (req: Request, res: Response) => {
     const lineItems = await getOrderLineItems(orderId, credentials);
 
     if (row.status === "created") {
-      const deliveryOrderId = await createDeliveryOrder(row.sales_order_id, lineItems, undefined, transDate);
+      const deliveryOrderId = await createDeliveryOrder(orderId, row.sales_order_id, lineItems, undefined, transDate);
       db.prepare("UPDATE tiktok_orders SET delivery_order_id = ?, status = 'shipped' WHERE order_id = ?").run(deliveryOrderId, orderId);
       row = { ...row, delivery_order_id: deliveryOrderId, status: "shipped" };
       console.log(`[orderAdmin] manually created Delivery Order ${deliveryOrderId} for TikTok order ${orderId} (SO ${row.sales_order_id})`);
@@ -463,7 +463,7 @@ router.post("/shopee/bulk-backfill", async (req: Request, res: Response) => {
       let salesInvoiceId: number | null = null;
 
       if (STAGE_ORDER.indexOf(targetStage) >= STAGE_ORDER.indexOf("shipped")) {
-        deliveryOrderId = await createDeliveryOrder(salesOrderId, lineItems, customerId, transDate);
+        deliveryOrderId = await createDeliveryOrder(orderSn, salesOrderId, lineItems, customerId, transDate);
       }
       if (targetStage === "invoiced" && deliveryOrderId !== null) {
         salesInvoiceId = await createSalesInvoice(orderSn, salesOrderId, deliveryOrderId, lineItems, customerId, transDate);

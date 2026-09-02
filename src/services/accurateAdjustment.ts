@@ -40,9 +40,22 @@ export async function getDefaultWarehouseId(): Promise<string> {
   return id;
 }
 
+// dd/mm/yyyy in Asia/Jakarta — the business's own timezone, and the one Accurate's
+// books are kept in. Must NOT use getDate()/getMonth(), which read the process's
+// local timezone: the production container runs UTC (same trap documented in
+// accurateClient.ts's formatTimestamp), so an order placed 00:00-07:00 Jakarta —
+// i.e. 17:00-24:00 UTC the previous day — would be dated a day early, silently
+// booking it into the wrong day and, at a month boundary, the wrong period.
 export function formatAccurateDate(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()}`;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Jakarta",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).formatToParts(date);
+
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)!.value;
+  return `${get("day")}/${get("month")}/${get("year")}`;
 }
 
 // NOTE: the exact detail-line field name (`detailItem`) and the sign convention for

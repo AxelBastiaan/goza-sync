@@ -192,6 +192,7 @@ export async function createSalesOrder(
 }
 
 export async function createDeliveryOrder(
+  orderId: string,
   salesOrderId: number,
   lineItems: OrderLineItem[],
   customerId: number = getTikTokCustomerId(),
@@ -223,13 +224,17 @@ export async function createDeliveryOrder(
       transDate: formatAccurateDate(transDate),
       warehouseId: Number(warehouseId),
       salesOrderId,
+      // Raw order id, same as the Sales Invoice's `number` — confirmed live these
+      // don't share a uniqueness namespace with each other (unlike SO's poNumber,
+      // which does conflict with SI's number and needs its "SO-" prefix).
+      number: orderId,
       inclusiveTax: true,
       detailItem,
     }
   );
 
   if (!response.data?.s) {
-    throw new Error(`Accurate delivery-order/save.do failed for SO ${salesOrderId}: ${JSON.stringify(response.data?.d ?? response.status)}`);
+    throw new Error(`Accurate delivery-order/save.do failed for order ${orderId} (SO ${salesOrderId}): ${JSON.stringify(response.data?.d ?? response.status)}`);
   }
 
   const deliveryOrderId = response.data?.r?.id ?? response.data?.d?.id;

@@ -50,11 +50,18 @@ export async function getShopeeOrderSummaries(orderSns: string[], credentials: S
 // item's promotion type — worth cross-checking against a real shopee_discount
 // example (and admin's manually-booked amount) before fully trusting this on an
 // order with mixed promotion types.
-export async function getShopeeOrderLineItems(orderSn: string, credentials: ShopeeStoreCredentials): Promise<OrderLineItem[]> {
+export interface ShopeeOrderDetail {
+  lineItems: OrderLineItem[];
+  // See TikTokOrderDetail.createdAt — same purpose: book the Accurate documents
+  // on the order's own date, not the date its webhook happened to arrive.
+  createdAt: Date | undefined;
+}
+
+export async function getShopeeOrderDetail(orderSn: string, credentials: ShopeeStoreCredentials): Promise<ShopeeOrderDetail> {
   const response = await callShopeeApi(
     "GET",
     "/api/v2/order/get_order_detail",
-    { order_sn_list: orderSn, response_optional_fields: "item_list,total_amount,order_status" },
+    { order_sn_list: orderSn, response_optional_fields: "item_list,total_amount,order_status,create_time" },
     null,
     credentials
   );
@@ -64,13 +71,13 @@ export async function getShopeeOrderLineItems(orderSn: string, credentials: Shop
 
   if (data?.error) {
     console.warn(`[shopeeOrders] order detail request failed for ${orderSn}: ${data.message ?? data.error}`);
-    return [];
+    return { lineItems: [], createdAt: undefined };
   }
 
   const order = data?.response?.order_list?.[0];
   if (!order) {
     console.warn(`[shopeeOrders] no order found for order_sn ${orderSn}`);
-    return [];
+    return { lineItems: [], createdAt: undefined };
   }
 
   const items = order.item_list ?? [];
@@ -94,5 +101,12 @@ export async function getShopeeOrderLineItems(orderSn: string, credentials: Shop
     results.push({ sellerSku, quantity, unitPrice, originalPrice });
   }
 
-  return results;
+  return {
+    lineItems: results,
+    createdAt: order.create_time ? new Date(order.create_time * 1000) : undefined,
+  };
+}
+
+export async function getShopeeOrderLineItems(orderSn: string, credentials: ShopeeStoreCredentials): Promise<OrderLineItem[]> {
+  return (await getShopeeOrderDetail(orderSn, credentials)).lineItems;
 }

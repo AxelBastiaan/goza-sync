@@ -14,6 +14,7 @@ function switchView(view) {
   document.querySelectorAll(".view").forEach((v) => { v.hidden = v.id !== `view-${view}`; });
   // Re-read the store list on entry so a store connected since page load shows up.
   if (view === "import") loadImportStores();
+  if (view === "recall") { loadRecallStatus(); loadRecallFiles(); }
   if (view === "opname") loadOpnameChecklist();
 }
 document.querySelectorAll(".nav-item").forEach((item) => {
@@ -991,6 +992,123 @@ importCommitBtn.addEventListener("click", async () => {
 });
 
 loadImportStores();
+
+// ---- Sales Recall ----
+const recallGenerateBtn = document.getElementById("recall-generate-btn");
+const recallMessage = document.getElementById("recall-message");
+const recallLog = document.getElementById("recall-log");
+const recallFilesList = document.getElementById("recall-files-list");
+const recallFilesEmpty = document.getElementById("recall-files-empty");
+
+let recallPollTimer = null;
+
+function showRecallMessage(text, type) {
+  recallMessage.textContent = text;
+  recallMessage.className = `message ${type}`;
+  recallMessage.hidden = false;
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function loadRecallFiles() {
+  const res = await fetch("/api/sales-recall/files");
+  const files = await res.json();
+
+  recallFilesList.innerHTML = "";
+  if (files.length === 0) {
+    recallFilesEmpty.hidden = false;
+    return;
+  }
+  recallFilesEmpty.hidden = true;
+
+  for (const f of files) {
+    const row = document.createElement("div");
+    row.className = "store-row";
+
+    const info = document.createElement("div");
+    info.className = "store-info";
+    info.innerHTML = `<div class="store-name">${f.salesperson}</div><div class="muted" style="font-size:0.8rem;">${formatBytes(f.sizeBytes)} — generated ${new Date(f.generatedAt).toLocaleString()}</div>`;
+
+    const downloadBtn = document.createElement("button");
+    downloadBtn.className = "secondary";
+    downloadBtn.textContent = "Download";
+    downloadBtn.addEventListener("click", () => {
+      window.location.href = `/api/sales-recall/download/${encodeURIComponent(f.filename)}`;
+    });
+
+    row.append(info, downloadBtn);
+    recallFilesList.appendChild(row);
+  }
+}
+
+function renderRecallStatus(data) {
+  recallLog.hidden = data.log.length === 0;
+  recallLog.textContent = data.log.join("\n");
+  recallLog.scrollTop = recallLog.scrollHeight;
+
+  if (data.status === "running") {
+    recallGenerateBtn.disabled = true;
+    recallGenerateBtn.innerHTML = '<span class="spinner"></span> Generating…';
+    showRecallMessage("Generating recall files — this can take a few minutes…", "success");
+  } else {
+    recallGenerateBtn.disabled = false;
+    recallGenerateBtn.textContent = "Generate Recall Files";
+    if (data.status === "success") {
+      showRecallMessage(`Done — finished ${new Date(data.finishedAt).toLocaleString()}`, "success");
+    } else if (data.status === "error") {
+      showRecallMessage("Generation failed — see log below.", "error");
+    } else {
+      recallMessage.hidden = true;
+    }
+  }
+}
+
+async function loadRecallStatus() {
+  const res = await fetch("/api/sales-recall/status");
+  const data = await res.json();
+  renderRecallStatus(data);
+
+  if (data.status === "running") {
+    if (!recallPollTimer) recallPollTimer = setInterval(pollRecallStatus, 3000);
+  } else if (recallPollTimer) {
+    clearInterval(recallPollTimer);
+    recallPollTimer = null;
+  }
+  return data;
+}
+
+async function pollRecallStatus() {
+  const data = await loadRecallStatus();
+  if (data.status !== "running") {
+    await loadRecallFiles();
+  }
+}
+
+recallGenerateBtn.addEventListener("click", async () => {
+  recallGenerateBtn.disabled = true;
+  recallGenerateBtn.innerHTML = '<span class="spinner"></span> Starting…';
+  recallMessage.hidden = true;
+
+  try {
+    const res = await fetch("/api/sales-recall/generate", { method: "POST" });
+    if (!res.ok && res.status !== 202) {
+      const result = await res.json().catch(() => ({}));
+      showRecallMessage(result.error || "Failed to start generation", "error");
+      recallGenerateBtn.disabled = false;
+      recallGenerateBtn.textContent = "Generate Recall Files";
+      return;
+    }
+    await loadRecallStatus();
+  } catch (err) {
+    showRecallMessage("Failed to reach the server", "error");
+    recallGenerateBtn.disabled = false;
+    recallGenerateBtn.textContent = "Generate Recall Files";
+  }
+});
 
 // ---- OAuth callback feedback ----
 // The "Integrate" flow opens the authorization link in a NEW tab; the callback

@@ -24,10 +24,21 @@ export async function getOrderStatus(orderId: string, credentials: TikTokStoreCr
   return data?.data?.orders?.[0]?.status;
 }
 
+export interface TikTokOrderDetail {
+  lineItems: OrderLineItem[];
+  // When the buyer actually placed the order. Used as the transDate on the
+  // Accurate documents so a sale is booked in the period it really happened,
+  // rather than whenever the webhook that triggered the write arrived — those
+  // differ by days (order placed, then delivered/completed a week later), which
+  // silently pushed revenue into the wrong period. undefined if TikTok didn't
+  // report create_time, in which case callers fall back to "now" as before.
+  createdAt: Date | undefined;
+}
+
 // Takes a specific store's credentials — an order belongs to exactly one shop, and
 // with multiple TikTok stores connected there's no longer a single global token to
 // assume; the caller (tiktokWebhook.ts) resolves which store from the webhook's shop_id.
-export async function getOrderLineItems(orderId: string, credentials: TikTokStoreCredentials): Promise<OrderLineItem[]> {
+export async function getOrderDetail(orderId: string, credentials: TikTokStoreCredentials): Promise<TikTokOrderDetail> {
   const response = await callTikTokApi("GET", "/order/202309/orders", { ids: orderId }, null, credentials);
 
   const data = response.data;
@@ -35,7 +46,7 @@ export async function getOrderLineItems(orderId: string, credentials: TikTokStor
 
   if (data?.code !== 0) {
     console.warn(`[tiktokOrders] order detail request failed for ${orderId}: ${data?.message ?? response.status}`);
-    return [];
+    return { lineItems: [], createdAt: undefined };
   }
 
   const orders = data?.data?.orders ?? [];
@@ -43,7 +54,7 @@ export async function getOrderLineItems(orderId: string, credentials: TikTokStor
 
   if (!order) {
     console.warn(`[tiktokOrders] no order found for id ${orderId}`);
-    return [];
+    return { lineItems: [], createdAt: undefined };
   }
 
   const lineItems = order.line_items ?? order.order_line_list ?? [];
@@ -77,5 +88,12 @@ export async function getOrderLineItems(orderId: string, credentials: TikTokStor
     results.push({ sellerSku, quantity, unitPrice, originalPrice });
   }
 
-  return results;
+  return {
+    lineItems: results,
+    createdAt: order.create_time ? new Date(order.create_time * 1000) : undefined,
+  };
+}
+
+export async function getOrderLineItems(orderId: string, credentials: TikTokStoreCredentials): Promise<OrderLineItem[]> {
+  return (await getOrderDetail(orderId, credentials)).lineItems;
 }
