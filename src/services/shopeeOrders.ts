@@ -57,6 +57,23 @@ export interface ShopeeOrderDetail {
   createdAt: Date | undefined;
 }
 
+// A Shopee order sn begins with YYMMDD in the shop's own timezone — verified
+// against Shopee's create_time on 8/8 sampled orders, exact match every time.
+// Used only as a fallback: without it, a missing create_time silently books the
+// document on today's date, which is precisely the bug that put 86 invoices on
+// the wrong day. Deriving the date from the order number keeps that from
+// recurring even when the API omits create_time or the order is too old to fetch.
+export function shopeeOrderDateFromSn(orderSn: string): Date | undefined {
+  if (!/^\d{6}[A-Z0-9]{6,}$/.test(orderSn)) return undefined;
+  const yy = Number(orderSn.slice(0, 2));
+  const mm = Number(orderSn.slice(2, 4));
+  const dd = Number(orderSn.slice(4, 6));
+  if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return undefined;
+  // Midday Jakarta (05:00 UTC) — safely inside the day regardless of how the
+  // date is later rendered, so the fallback can't itself drift a day.
+  return new Date(Date.UTC(2000 + yy, mm - 1, dd, 5, 0, 0));
+}
+
 export async function getShopeeOrderDetail(orderSn: string, credentials: ShopeeStoreCredentials): Promise<ShopeeOrderDetail> {
   const response = await callShopeeApi(
     "GET",
@@ -71,13 +88,13 @@ export async function getShopeeOrderDetail(orderSn: string, credentials: ShopeeS
 
   if (data?.error) {
     console.warn(`[shopeeOrders] order detail request failed for ${orderSn}: ${data.message ?? data.error}`);
-    return { lineItems: [], createdAt: undefined };
+    return { lineItems: [], createdAt: shopeeOrderDateFromSn(orderSn) };
   }
 
   const order = data?.response?.order_list?.[0];
   if (!order) {
     console.warn(`[shopeeOrders] no order found for order_sn ${orderSn}`);
-    return { lineItems: [], createdAt: undefined };
+    return { lineItems: [], createdAt: shopeeOrderDateFromSn(orderSn) };
   }
 
   const items = order.item_list ?? [];
@@ -101,10 +118,18 @@ export async function getShopeeOrderDetail(orderSn: string, credentials: ShopeeS
     results.push({ sellerSku, quantity, unitPrice, originalPrice });
   }
 
-  return {
-    lineItems: results,
-    createdAt: order.create_time ? new Date(order.create_time * 1000) : undefined,
-  };
+  let createdAt: Date | undefined;
+  if (order.create_time) {
+    createdAt = new Date(order.create_time * 1000);
+  } else {
+    createdAt = shopeeOrderDateFromSn(orderSn);
+    console.warn(
+      `[shopeeOrders] ${orderSn} has no create_time; ` +
+        (createdAt ? `falling back to the date in the order number (${createdAt.toISOString()})` : "and its order number isn't parseable — documents will be dated today")
+    );
+  }
+
+  return { lineItems: results, createdAt };
 }
 
 export async function getShopeeOrderLineItems(orderSn: string, credentials: ShopeeStoreCredentials): Promise<OrderLineItem[]> {
