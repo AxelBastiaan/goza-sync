@@ -86,8 +86,14 @@ async function fetchDeliveryOrderDetailRows(deliveryOrderId: number): Promise<{ 
 // negative if a listing's "original" price on file is below what was actually
 // charged — the field accepts that the same way, since it's a plain subtraction;
 // the total transaction value is preserved exactly regardless of direction.
-// Lines with no mapping, or whose mapped Accurate item doesn't have that unit
-// level configured, are skipped (logged, not thrown).
+//
+// A line that can't be resolved (no SKU mapping, or the mapped Accurate item has
+// no such unit level) aborts the whole document rather than being skipped.
+// Skipping used to be the behaviour and it silently under-invoiced: one real order
+// booked Rp26,400 instead of Rp270,000 because 7 of its 8 lines were unmapped at
+// the time, and nothing anywhere reported it. A missing document is recoverable
+// (the mapping gets added, then the order is backfilled); a document that is
+// quietly short by most of its value is not, because nobody knows to look.
 export interface AccurateDetailItem {
   itemNo: string;
   quantity: number;
@@ -103,19 +109,18 @@ async function toAccurateDetailItems(lineItems: OrderLineItem[]): Promise<Accura
   const accurateItemData = await fetchAccurateItemDataFor(accurateSkus);
 
   const details: AccurateDetailItem[] = [];
+  const unresolved: string[] = [];
 
   for (const { line, mapping } of mappings) {
     if (!mapping) {
-      console.log(`[accurateSalesFlow] no mapping for marketplace SKU ${line.sellerSku}, skipping line`);
+      unresolved.push(`${line.sellerSku} (no SKU mapping)`);
       continue;
     }
 
     const itemData = accurateItemData.get(mapping.accurateSku);
     const unit = itemData?.units[mapping.unitLevel];
     if (!unit) {
-      console.warn(
-        `[accurateSalesFlow] Accurate item ${mapping.accurateSku} has no unit level ${mapping.unitLevel} configured, skipping line for ${line.sellerSku}`
-      );
+      unresolved.push(`${line.sellerSku} (Accurate item ${mapping.accurateSku} has no unit level ${mapping.unitLevel})`);
       continue;
     }
 
@@ -133,6 +138,13 @@ async function toAccurateDetailItems(lineItems: OrderLineItem[]): Promise<Accura
       unitPrice: grossUnitPrice / unit.ratio,
       itemCashDiscount: grossTotal - actualTotal,
     });
+  }
+
+  if (unresolved.length > 0) {
+    throw new Error(
+      `Refusing to write a document that would be missing ${unresolved.length} of ${lineItems.length} line(s): ` +
+        `${unresolved.join("; ")}. Add the SKU mapping, then backfill this order.`
+    );
   }
 
   return details;

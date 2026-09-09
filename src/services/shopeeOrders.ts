@@ -57,12 +57,16 @@ export interface ShopeeOrderDetail {
   createdAt: Date | undefined;
 }
 
-// A Shopee order sn begins with YYMMDD in the shop's own timezone — verified
-// against Shopee's create_time on 8/8 sampled orders, exact match every time.
-// Used only as a fallback: without it, a missing create_time silently books the
-// document on today's date, which is precisely the bug that put 86 invoices on
-// the wrong day. Deriving the date from the order number keeps that from
-// recurring even when the API omits create_time or the order is too old to fetch.
+// A Shopee order sn begins with YYMMDD — but in UTC+8 (Shopee's regional time),
+// NOT the shop's Jakarta time (UTC+7). An order placed between 23:00 and midnight
+// Jakarta therefore carries the NEXT day's date in its order number.
+//
+// So this is a best-effort fallback only, accurate for ~23 of every 24 hours and
+// one day late for the rest. create_time is the authoritative source and must be
+// preferred wherever it is available; do not use this to "correct" existing
+// documents in bulk. Learned the hard way: a bulk correction driven off this
+// prefix moved 20 already-correct invoices onto the wrong day, because the
+// sample used to validate the rule happened to contain no late-evening orders.
 export function shopeeOrderDateFromSn(orderSn: string): Date | undefined {
   if (!/^\d{6}[A-Z0-9]{6,}$/.test(orderSn)) return undefined;
   const yy = Number(orderSn.slice(0, 2));
