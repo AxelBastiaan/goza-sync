@@ -16,6 +16,7 @@ function switchView(view) {
   if (view === "import") loadImportStores();
   if (view === "recall") { loadRecallStatus(); loadRecallFiles(); }
   if (view === "opname") loadOpnameChecklist();
+  if (view === "alerts") loadAlerts();
 }
 document.querySelectorAll(".nav-item").forEach((item) => {
   item.addEventListener("click", () => switchView(item.dataset.view));
@@ -1420,3 +1421,165 @@ opnameMarkDoneBtn.addEventListener("click", async () => {
     opnameMarkDoneBtn.disabled = false;
   }
 });
+
+// ---- SKU Alerts ----
+// One row per marketplace SKU an order referenced that we couldn't resolve to an
+// Accurate item. These orders are deliberately left untouched in Accurate (a
+// partially-resolvable order used to be booked short, silently), so this list is
+// the queue of work standing between an order and its documents.
+const alertsList = document.getElementById("alerts-list");
+const alertsEmpty = document.getElementById("alerts-empty");
+const alertsMessage = document.getElementById("alerts-message");
+const alertsRefreshBtn = document.getElementById("alerts-refresh-btn");
+const alertsShowAll = document.getElementById("alerts-show-all");
+const alertsNavBadge = document.getElementById("alerts-nav-badge");
+
+let alertsData = [];
+
+function showAlertsMessage(text, type) {
+  alertsMessage.textContent = text;
+  alertsMessage.className = `message ${type}`;
+  alertsMessage.hidden = false;
+}
+
+function updateAlertsBadge(openCount) {
+  alertsNavBadge.textContent = openCount;
+  alertsNavBadge.hidden = !openCount;
+}
+
+function formatAlertDate(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function renderAlerts() {
+  const showAll = alertsShowAll.checked;
+  const visible = alertsData.filter((a) => showAll || a.status === "open");
+
+  alertsList.innerHTML = "";
+  alertsEmpty.hidden = visible.length !== 0;
+
+  for (const alert of visible) {
+    const row = document.createElement("div");
+    row.className = `alert-row ${alert.status === "open" ? "" : alert.status}`.trim();
+
+    const head = document.createElement("div");
+    head.className = "alert-head";
+
+    const platform = document.createElement("span");
+    platform.className = "badge neutral";
+    platform.textContent = `${PLATFORM_ICON[alert.platform] || ""} ${alert.platform}`.trim();
+
+    const sku = document.createElement("span");
+    sku.className = "alert-sku";
+    sku.textContent = alert.marketplaceSku;
+
+    const status = document.createElement("span");
+    if (alert.status === "open") {
+      status.className = "badge warn";
+      status.textContent = `blocking ${alert.blockedOrders.length} order${alert.blockedOrders.length === 1 ? "" : "s"}`;
+    } else if (alert.status === "resolved") {
+      status.className = "badge ok";
+      status.textContent = "mapped ✓";
+    } else {
+      status.className = "badge neutral";
+      status.textContent = "ignored";
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "alert-actions";
+
+    if (alert.status === "open") {
+      const ignoreBtn = document.createElement("button");
+      ignoreBtn.type = "button";
+      ignoreBtn.className = "secondary";
+      ignoreBtn.textContent = "Ignore";
+      ignoreBtn.addEventListener("click", () => alertAction(alert, `/api/sku-alerts/${alert.id}/ignore`, "POST", `${alert.marketplaceSku} ignored`));
+      actions.appendChild(ignoreBtn);
+    } else {
+      const reopenBtn = document.createElement("button");
+      reopenBtn.type = "button";
+      reopenBtn.className = "secondary";
+      reopenBtn.textContent = "Reopen";
+      reopenBtn.addEventListener("click", () => alertAction(alert, `/api/sku-alerts/${alert.id}/reopen`, "POST", `${alert.marketplaceSku} reopened`));
+      actions.appendChild(reopenBtn);
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "secondary";
+      deleteBtn.textContent = "Delete";
+      deleteBtn.addEventListener("click", () => alertAction(alert, `/api/sku-alerts/${alert.id}`, "DELETE", `${alert.marketplaceSku} removed`));
+      actions.appendChild(deleteBtn);
+    }
+
+    head.append(platform, sku, status, actions);
+
+    // The product title is what actually lets someone work out the intended SKU —
+    // a real case was solved purely from the variant name matching an Accurate item.
+    const title = document.createElement("div");
+    title.className = "alert-title";
+    title.textContent = alert.productTitle
+      ? alert.variantName
+        ? `${alert.productTitle} — ${alert.variantName}`
+        : alert.productTitle
+      : "(the marketplace didn't send a product title for this line)";
+    if (!alert.productTitle) title.classList.add("muted");
+
+    const reason = document.createElement("div");
+    reason.className = "alert-reason";
+    reason.textContent = alert.reason;
+
+    const orders = document.createElement("div");
+    orders.className = "alert-orders";
+    orders.textContent =
+      `Orders waiting: ${alert.blockedOrders.join(", ") || "—"}` +
+      ` · first seen ${formatAlertDate(alert.firstSeenAt)} · last seen ${formatAlertDate(alert.lastSeenAt)}`;
+
+    row.append(head, title, reason, orders);
+    alertsList.appendChild(row);
+  }
+}
+
+async function alertAction(alert, url, method, toastText) {
+  try {
+    const res = await fetch(url, { method });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    alertsData = data.alerts;
+    updateAlertsBadge(data.openCount);
+    renderAlerts();
+    showToast(toastText, "success");
+  } catch (err) {
+    showAlertsMessage(`Failed to update ${alert.marketplaceSku}: ${err.message}`, "error");
+  }
+}
+
+async function loadAlerts() {
+  alertsMessage.hidden = true;
+  try {
+    const res = await fetch("/api/sku-alerts");
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    alertsData = data.alerts;
+    updateAlertsBadge(data.openCount);
+    renderAlerts();
+  } catch (err) {
+    showAlertsMessage(`Failed to load SKU alerts: ${err.message}`, "error");
+  }
+}
+
+alertsRefreshBtn.addEventListener("click", loadAlerts);
+alertsShowAll.addEventListener("change", renderAlerts);
+
+// Badge on load, so an alert raised overnight is visible without opening the tab.
+fetch("/api/sku-alerts/count")
+  .then((res) => (res.ok ? res.json() : null))
+  .then((data) => data && updateAlertsBadge(data.openCount))
+  .catch(() => {});

@@ -2,8 +2,9 @@ import { Router, Request, Response } from "express";
 import { db } from "../db";
 import { getShopeeOrderDetail, ShopeeOrderDetail } from "../services/shopeeOrders";
 import { OrderLineItem } from "../services/tiktokOrders";
-import { createSalesOrder, createDeliveryOrder, createSalesInvoice, cancelOrder, getShopeeCustomerId } from "../services/accurateSalesFlow";
-import { verifyShopeeWebhookSignature } from "../services/shopeeClient";
+import { createSalesOrder, createDeliveryOrder, createSalesInvoice, cancelOrder, getShopeeCustomerId, resolveOrderLines } from "../services/accurateSalesFlow";
+import { recordUnmappedSkus } from "../services/skuAlerts";
+import { verifyShopeeWebhookSignature, ShopeeStoreCredentials } from "../services/shopeeClient";
 import { isLiveMode } from "../services/settings";
 import { getShopeeStoreByShopId } from "../services/storesRepo";
 import { getMappingForMarketplaceSku } from "../services/skuMappings";
@@ -95,6 +96,36 @@ async function pushUpdatedStockFor(accurateSkus: string[]): Promise<void> {
   }
 }
 
+// Fetches the order and refuses to write anything into Accurate if even one of its
+// lines can't be resolved to an Accurate item + unit. The document creators throw on
+// an unresolved line anyway (silently under-invoicing used to be the alternative, and
+// it cost a real order most of its value) — checking first means the failure is
+// recorded as an actionable alert on the SKU Alerts tab instead of scrolling past in
+// a log, and no half-finished SO/DO chain is left behind. Returns undefined when the
+// order is blocked; the caller must stop.
+async function loadOrderOrFlag(orderSn: string, credentials: ShopeeStoreCredentials): Promise<ShopeeOrderDetail | undefined> {
+  const detail = await getShopeeOrderDetail(orderSn, credentials);
+  // An order that came back with no lines at all (a failed/empty API response)
+  // would otherwise sail through the check below and write an empty document.
+  if (detail.lineItems.length === 0) {
+    console.warn(`[shopeeWebhook] order ${orderSn} came back with no line items — not creating any Accurate documents`);
+    return undefined;
+  }
+
+  const { unresolved } = await resolveOrderLines(detail.lineItems);
+
+  if (unresolved.length > 0) {
+    recordUnmappedSkus("shopee", orderSn, unresolved);
+    console.warn(
+      `[shopeeWebhook] order ${orderSn} flagged, no Accurate documents created — ` +
+        unresolved.map((u) => `${u.sellerSku}: ${u.reason}`).join("; ")
+    );
+    return undefined;
+  }
+
+  return detail;
+}
+
 router.post("/", async (req: Request, res: Response) => {
   console.log("[shopeeWebhook] raw headers:", JSON.stringify(req.headers));
   console.log("[shopeeWebhook] raw payload:", JSON.stringify(req.body));
@@ -150,7 +181,8 @@ router.post("/", async (req: Request, res: Response) => {
     let detail: ShopeeOrderDetail | undefined;
 
     if (!row) {
-      detail = await getShopeeOrderDetail(orderSn, credentials);
+      detail = await loadOrderOrFlag(orderSn, credentials);
+      if (!detail) return;
       const { salesOrderId, detailItems } = await createSalesOrder(orderSn, detail.lineItems, customerId, detail.createdAt);
       insertOrderRow(orderSn, salesOrderId);
       row = getOrderRow(orderSn)!;
@@ -177,7 +209,8 @@ router.post("/", async (req: Request, res: Response) => {
         console.log(`[shopeeWebhook] no action for order ${orderSn}: current status "${row.status}", incoming code ${code}, order_status "${orderStatus}"`);
       }
     } else if (target && row.status !== "cancelled" && STAGE_ORDER.indexOf(target) > STAGE_ORDER.indexOf(row.status)) {
-      detail = detail ?? (await getShopeeOrderDetail(orderSn, credentials));
+      detail = detail ?? (await loadOrderOrFlag(orderSn, credentials));
+      if (!detail) return;
 
       if (row.status === "created") {
         const deliveryOrderId = await createDeliveryOrder(orderSn, row.sales_order_id!, detail.lineItems, customerId, detail.createdAt);

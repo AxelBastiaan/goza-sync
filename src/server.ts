@@ -21,6 +21,7 @@ import importRouter from "./routes/import";
 import orderAdminRouter from "./routes/orderAdmin";
 import salesRecallRouter from "./routes/salesRecall";
 import stockOpnameRouter from "./routes/stockOpname";
+import skuAlertsRouter from "./routes/skuAlerts";
 import { renewAccurateWebhook } from "./services/accurateWebhookRenewal";
 import { renewAllShopeeStores } from "./services/shopeeAuth";
 import { renewAllTikTokStores } from "./services/tiktokAuth";
@@ -91,6 +92,7 @@ app.use("/api/import", requireAuth, importRouter);
 app.use("/api/order-admin", requireAuth, orderAdminRouter);
 app.use("/api/sales-recall", requireAuth, salesRecallRouter);
 app.use("/api/stock-opname", requireAuth, stockOpnameRouter);
+app.use("/api/sku-alerts", requireAuth, skuAlertsRouter);
 
 const PORT = Number(getEnv("PORT") || 8000);
 

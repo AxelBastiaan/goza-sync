@@ -4,6 +4,7 @@ import { getDefaultWarehouseId, formatAccurateDate } from "./accurateAdjustment"
 import { fetchAccurateItemDataFor } from "./stockSync";
 import { getMappingForMarketplaceSku } from "./skuMappings";
 import { OrderLineItem } from "./tiktokOrders";
+import { UnresolvedOrderLine } from "./skuAlerts";
 
 // NOTE: everything in this file writes real Sales Order / Delivery Order / Sales
 // Invoice documents into Accurate's live books. Field names for the *write* (save.do)
@@ -101,7 +102,16 @@ export interface AccurateDetailItem {
   itemCashDiscount: number;
 }
 
-async function toAccurateDetailItems(lineItems: OrderLineItem[]): Promise<AccurateDetailItem[]> {
+export interface ResolvedOrderLines {
+  details: AccurateDetailItem[];
+  unresolved: UnresolvedOrderLine[];
+}
+
+// Splits an order's lines into ones that can be written to Accurate and ones that
+// can't. Exported so a caller (the webhooks) can check an order BEFORE it starts
+// creating documents — recording an alert and stopping is far better than starting
+// a SO/DO/SI chain that aborts partway through.
+export async function resolveOrderLines(lineItems: OrderLineItem[]): Promise<ResolvedOrderLines> {
   const mappings = lineItems.map((line) => ({ line, mapping: getMappingForMarketplaceSku(line.sellerSku) }));
   const accurateSkus = mappings
     .map(({ mapping }) => mapping?.accurateSku)
@@ -109,18 +119,31 @@ async function toAccurateDetailItems(lineItems: OrderLineItem[]): Promise<Accura
   const accurateItemData = await fetchAccurateItemDataFor(accurateSkus);
 
   const details: AccurateDetailItem[] = [];
-  const unresolved: string[] = [];
+  const unresolved: UnresolvedOrderLine[] = [];
 
   for (const { line, mapping } of mappings) {
+    const context = { sellerSku: line.sellerSku, productName: line.productName, variantName: line.variantName };
+
     if (!mapping) {
-      unresolved.push(`${line.sellerSku} (no SKU mapping)`);
+      unresolved.push({ ...context, reason: "No SKU mapping — this marketplace SKU isn't linked to any Accurate item yet" });
       continue;
     }
 
     const itemData = accurateItemData.get(mapping.accurateSku);
-    const unit = itemData?.units[mapping.unitLevel];
+    if (!itemData) {
+      unresolved.push({
+        ...context,
+        reason: `Mapped to Accurate item ${mapping.accurateSku}, but no such item exists in Accurate`,
+      });
+      continue;
+    }
+
+    const unit = itemData.units[mapping.unitLevel];
     if (!unit) {
-      unresolved.push(`${line.sellerSku} (Accurate item ${mapping.accurateSku} has no unit level ${mapping.unitLevel})`);
+      unresolved.push({
+        ...context,
+        reason: `Mapped to Accurate item ${mapping.accurateSku} at unit level ${mapping.unitLevel}, but that item has no unit at that level`,
+      });
       continue;
     }
 
@@ -128,7 +151,7 @@ async function toAccurateDetailItems(lineItems: OrderLineItem[]): Promise<Accura
     // Fall back to Accurate's own item price if the marketplace didn't supply an
     // original/pre-promotion price (would otherwise zero out the gross value and
     // report the entire sale as a nonsensical negative discount).
-    const grossUnitPrice = line.originalPrice || itemData!.unitPrice || line.unitPrice;
+    const grossUnitPrice = line.originalPrice || itemData.unitPrice || line.unitPrice;
     const grossTotal = grossUnitPrice * line.quantity;
     const actualTotal = line.unitPrice * line.quantity;
 
@@ -140,11 +163,21 @@ async function toAccurateDetailItems(lineItems: OrderLineItem[]): Promise<Accura
     });
   }
 
+  return { details, unresolved };
+}
+
+export function describeUnresolvedLines(unresolved: UnresolvedOrderLine[], totalLines: number): string {
+  return (
+    `Refusing to write a document that would be missing ${unresolved.length} of ${totalLines} line(s): ` +
+    `${unresolved.map((u) => `${u.sellerSku} (${u.reason})`).join("; ")}. Add the SKU mapping, then backfill this order.`
+  );
+}
+
+async function toAccurateDetailItems(lineItems: OrderLineItem[]): Promise<AccurateDetailItem[]> {
+  const { details, unresolved } = await resolveOrderLines(lineItems);
+
   if (unresolved.length > 0) {
-    throw new Error(
-      `Refusing to write a document that would be missing ${unresolved.length} of ${lineItems.length} line(s): ` +
-        `${unresolved.join("; ")}. Add the SKU mapping, then backfill this order.`
-    );
+    throw new Error(describeUnresolvedLines(unresolved, lineItems.length));
   }
 
   return details;

@@ -902,3 +902,72 @@ a.stores-link:hover {
     border-bottom-color: #333;
   }
 }
+
+/* ---- SKU Alerts ---- */
+.nav-badge {
+  margin-left: auto;
+  background: #dc2626;
+  color: #fff;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.05rem 0.45rem;
+}
+
+.alert-row {
+  border: 1px solid #e5e7eb;
+  border-left: 3px solid #dc2626;
+  border-radius: 6px;
+  padding: 0.8rem 1rem;
+  margin-bottom: 0.7rem;
+}
+
+.alert-row.resolved {
+  border-left-color: #16a34a;
+  opacity: 0.75;
+}
+
+.alert-row.ignored {
+  border-left-color: #9ca3af;
+  opacity: 0.6;
+}
+
+.alert-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.alert-sku {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+}
+
+.alert-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 0.4rem;
+}
+
+.alert-title {
+  margin-top: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.alert-reason {
+  margin-top: 0.25rem;
+  font-size: 0.82rem;
+  color: #b91c1c;
+}
+
+.alert-orders {
+  margin-top: 0.4rem;
+  font-size: 0.78rem;
+  color: #6b7280;
+  word-break: break-all;
+}
+
+.badge.warn { background: #fee2e2; color: #991b1b; }
+.badge.ok { background: #dcfce7; color: #166534; }
+.badge.neutral { background: #f3f4f6; color: #4b5563; }

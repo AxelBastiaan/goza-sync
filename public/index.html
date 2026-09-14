@@ -14,6 +14,7 @@
     <div class="nav-item" data-view="import"><span class="nav-icon">⬇️</span> Import</div>
     <div class="nav-item" data-view="recall"><span class="nav-icon">📋</span> Sales Recall</div>
     <div class="nav-item" data-view="opname"><span class="nav-icon">🧮</span> Stock Opname</div>
+    <div class="nav-item" data-view="alerts"><span class="nav-icon">🚩</span> SKU Alerts <span class="nav-badge" id="alerts-nav-badge" hidden>0</span></div>
     <div class="nav-item" data-view="settings"><span class="nav-icon">⚙️</span> Settings</div>
     <div class="nav-item" id="logout-btn" style="margin-top:auto;"><span class="nav-icon">🚪</span> Log out</div>
   </nav>
@@ -133,6 +134,25 @@
           <div id="opname-logs-groups"></div>
           <p id="opname-logs-empty" class="empty-state" hidden>No completed items yet.</p>
         </div>
+      </main>
+    </section>
+
+    <!-- ============ SKU Alerts view ============ -->
+    <section class="view" id="view-alerts" hidden>
+      <main class="card">
+        <h2>SKU Alerts</h2>
+        <p class="subtitle">Orders from TikTok and Shopee whose SKU isn't linked to an Accurate item. Nothing is written into Accurate for these — add the mapping on Product Mapping, then backfill the listed orders.</p>
+
+        <div class="toolbar">
+          <button type="button" class="secondary" id="alerts-refresh-btn">↻ Refresh</button>
+          <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;margin-left:auto;">
+            <input type="checkbox" id="alerts-show-all" /> Show resolved &amp; ignored
+          </label>
+        </div>
+
+        <p id="alerts-message" class="message" hidden></p>
+        <div id="alerts-list"></div>
+        <p id="alerts-empty" class="empty-state" hidden>No unmapped SKUs — every order that came in could be matched to an Accurate item.</p>
       </main>
     </section>
 

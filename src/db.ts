@@ -184,3 +184,31 @@ db.exec(`
     PRIMARY KEY (year, date)
   )
 `);
+
+// One row per marketplace SKU that an order referenced but that couldn't be
+// resolved to an Accurate item. Orders containing one are refused outright (see
+// toAccurateDetailItems) rather than booked short, so this table is what makes
+// that refusal visible instead of silent — it's the queue of "orders we can't
+// book until someone maps this SKU".
+//
+// Keyed per (platform, marketplace_sku) so a SKU that blocks twenty orders is one
+// row to act on, not twenty; blocked_orders_json keeps the affected order ids so
+// they can be backfilled once the mapping exists. product_title is stored because
+// that is what actually lets a human work out the intended SKU (a real case was
+// resolved purely from the variant name "CAMPUS MERAH").
+db.exec(`
+  CREATE TABLE IF NOT EXISTS unmapped_sku_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    platform TEXT NOT NULL,
+    marketplace_sku TEXT NOT NULL,
+    product_title TEXT,
+    variant_name TEXT,
+    reason TEXT NOT NULL,
+    blocked_orders_json TEXT NOT NULL DEFAULT '[]',
+    occurrence_count INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'open',
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    UNIQUE (platform, marketplace_sku)
+  )
+`);

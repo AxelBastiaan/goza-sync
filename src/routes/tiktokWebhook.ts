@@ -1,8 +1,9 @@
 import { Router, Request, Response } from "express";
 import { db } from "../db";
 import { getOrderDetail, TikTokOrderDetail, OrderLineItem } from "../services/tiktokOrders";
-import { createSalesOrder, createDeliveryOrder, createSalesInvoice, cancelOrder } from "../services/accurateSalesFlow";
-import { verifyWebhookSignature } from "../services/tiktokClient";
+import { createSalesOrder, createDeliveryOrder, createSalesInvoice, cancelOrder, resolveOrderLines } from "../services/accurateSalesFlow";
+import { recordUnmappedSkus } from "../services/skuAlerts";
+import { verifyWebhookSignature, TikTokStoreCredentials } from "../services/tiktokClient";
 import { isLiveMode } from "../services/settings";
 import { getTikTokStoreByShopId } from "../services/storesRepo";
 import { getMappingForMarketplaceSku } from "../services/skuMappings";
@@ -120,6 +121,33 @@ async function pushUpdatedStockFor(accurateSkus: string[]): Promise<void> {
   }
 }
 
+// See shopeeWebhook.ts's copy for the reasoning: an order with any line that can't
+// be resolved to an Accurate item + unit is flagged on the SKU Alerts tab and left
+// alone entirely, rather than starting a SO/DO/SI chain that throws partway through.
+// Returns undefined when the order is blocked; the caller must stop.
+async function loadOrderOrFlag(orderId: string, credentials: TikTokStoreCredentials): Promise<TikTokOrderDetail | undefined> {
+  const detail = await getOrderDetail(orderId, credentials);
+  // An order that came back with no lines at all (a failed/empty API response)
+  // would otherwise sail through the check below and write an empty document.
+  if (detail.lineItems.length === 0) {
+    console.warn(`[tiktokWebhook] order ${orderId} came back with no line items — not creating any Accurate documents`);
+    return undefined;
+  }
+
+  const { unresolved } = await resolveOrderLines(detail.lineItems);
+
+  if (unresolved.length > 0) {
+    recordUnmappedSkus("tiktok", orderId, unresolved);
+    console.warn(
+      `[tiktokWebhook] order ${orderId} flagged, no Accurate documents created — ` +
+        unresolved.map((u) => `${u.sellerSku}: ${u.reason}`).join("; ")
+    );
+    return undefined;
+  }
+
+  return detail;
+}
+
 router.post("/", async (req: Request, res: Response) => {
   console.log("[tiktokWebhook] raw headers:", JSON.stringify(req.headers));
   console.log("[tiktokWebhook] raw payload:", JSON.stringify(req.body));
@@ -168,7 +196,8 @@ router.post("/", async (req: Request, res: Response) => {
     let detail: TikTokOrderDetail | undefined;
 
     if (!row) {
-      detail = await getOrderDetail(orderId, credentials);
+      detail = await loadOrderOrFlag(orderId, credentials);
+      if (!detail) return;
       const { salesOrderId, detailItems } = await createSalesOrder(orderId, detail.lineItems, undefined, detail.createdAt);
       insertOrderRow(orderId, salesOrderId);
       row = getOrderRow(orderId)!;
@@ -202,7 +231,8 @@ router.post("/", async (req: Request, res: Response) => {
       // Catches up through every stage between the current one and the stage the
       // incoming status implies, rather than requiring one exact transition — see
       // impliedStage()'s comment for why.
-      detail = detail ?? (await getOrderDetail(orderId, credentials));
+      detail = detail ?? (await loadOrderOrFlag(orderId, credentials));
+      if (!detail) return;
 
       if (row.status === "created") {
         const deliveryOrderId = await createDeliveryOrder(orderId, row.sales_order_id!, detail.lineItems, undefined, detail.createdAt);

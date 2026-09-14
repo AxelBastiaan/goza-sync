@@ -119,7 +119,14 @@ export async function getShopeeOrderDetail(orderSn: string, credentials: ShopeeS
       console.warn(`[shopeeOrders] could not resolve a unit price for SKU ${sellerSku} on order ${orderSn}:`, JSON.stringify(item));
     }
 
-    results.push({ sellerSku, quantity, unitPrice, originalPrice });
+    results.push({
+      sellerSku,
+      quantity,
+      unitPrice,
+      originalPrice,
+      productName: item.item_name,
+      variantName: item.model_name,
+    });
   }
 
   let createdAt: Date | undefined;

@@ -9,6 +9,13 @@ export interface OrderLineItem {
   // Accurate documents (see accurateSalesFlow.ts), instead of Accurate's own
   // (potentially stale) item price.
   originalPrice: number;
+  // Human-readable product/variant names as the marketplace shows them. Carried
+  // only so an unmapped SKU can be reported with enough context for someone to work
+  // out what it was meant to be — a real case (Shopee "SMR-38-E") was resolved purely
+  // from the variant name "CAMPUS MERAH" matching an Accurate item. Never used for
+  // any document field.
+  productName?: string;
+  variantName?: string;
 }
 
 // Reads the order's real current status directly from TikTok, rather than
@@ -85,7 +92,14 @@ export async function getOrderDetail(orderId: string, credentials: TikTokStoreCr
       console.warn(`[tiktokOrders] could not resolve a unit price for SKU ${sellerSku} on order ${orderId}:`, JSON.stringify(line));
     }
 
-    results.push({ sellerSku, quantity, unitPrice, originalPrice });
+    results.push({
+      sellerSku,
+      quantity,
+      unitPrice,
+      originalPrice,
+      productName: line.product_name,
+      variantName: line.sku_name,
+    });
   }
 
   return {
