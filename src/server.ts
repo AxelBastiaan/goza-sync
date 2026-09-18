@@ -25,6 +25,7 @@ import skuAlertsRouter from "./routes/skuAlerts";
 import { renewAccurateWebhook } from "./services/accurateWebhookRenewal";
 import { renewAllShopeeStores } from "./services/shopeeAuth";
 import { renewAllTikTokStores } from "./services/tiktokAuth";
+import { reconcileAllOrders } from "./services/orderReconciliation";
 
 const app = express();
 app.use(
@@ -123,3 +124,17 @@ renewAllTikTokStores().catch((err) => console.error("[tiktokTokenRenewal] initia
 setInterval(() => {
   renewAllTikTokStores().catch((err) => console.error("[tiktokTokenRenewal] renew failed:", err.message));
 }, TIKTOK_TOKEN_RENEWAL_INTERVAL_MS);
+
+// Safety net under the order webhooks: re-read every non-final order's real
+// marketplace status and catch up any document a lost push should have
+// triggered. Both marketplaces drop pushes (17 Shopee orders were found stuck
+// for weeks on 2026-09-18). First run is delayed so a fresh deploy doesn't
+// hammer the marketplaces before the token renewals above have settled.
+const ORDER_RECONCILE_INTERVAL_MS = 30 * 60 * 1000;
+
+setTimeout(() => {
+  reconcileAllOrders().catch((err) => console.error("[reconcile] initial sweep failed:", err.message));
+}, 2 * 60 * 1000);
+setInterval(() => {
+  reconcileAllOrders().catch((err) => console.error("[reconcile] sweep failed:", err.message));
+}, ORDER_RECONCILE_INTERVAL_MS);

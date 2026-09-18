@@ -374,3 +374,23 @@ export async function cancelOrder(salesOrderId: number, deliveryOrderId: number 
     throw new Error(`Accurate sales-order/save.do (close) failed for SO ${salesOrderId}: ${JSON.stringify(closeResponse.data?.d ?? closeResponse.status)}`);
   }
 }
+
+// Undoes cancelOrder's close for an order that turned out not to be cancelled
+// (Shopee IN_CANCEL that the seller rejected). Only the SO can be brought back —
+// the Delivery Order was hard-deleted and must be recreated by the caller.
+export async function reopenSalesOrder(salesOrderId: number): Promise<void> {
+  const response = await callAccurateApi(
+    "POST",
+    "sales-order/save.do",
+    {},
+    {
+      id: salesOrderId,
+      manualClosed: false,
+      closeReason: "",
+    }
+  );
+
+  if (!response.data?.s) {
+    throw new Error(`Accurate sales-order/save.do (reopen) failed for SO ${salesOrderId}: ${JSON.stringify(response.data?.d ?? response.status)}`);
+  }
+}

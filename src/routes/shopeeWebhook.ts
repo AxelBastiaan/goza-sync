@@ -4,6 +4,7 @@ import { getShopeeOrderDetail, ShopeeOrderDetail } from "../services/shopeeOrder
 import { OrderLineItem } from "../services/tiktokOrders";
 import { createSalesOrder, createDeliveryOrder, createSalesInvoice, cancelOrder, getShopeeCustomerId, resolveOrderLines } from "../services/accurateSalesFlow";
 import { recordUnmappedSkus } from "../services/skuAlerts";
+import { withOrderLock } from "../services/orderLock";
 import { verifyShopeeWebhookSignature, ShopeeStoreCredentials } from "../services/shopeeClient";
 import { isLiveMode } from "../services/settings";
 import { getShopeeStoreByShopId } from "../services/storesRepo";
@@ -60,7 +61,11 @@ function impliedStage(pushCode: number, orderStatus: string | undefined): OrderS
   }
   if (pushCode === CODE_ORDER_STATUS) {
     if (orderStatus === "COMPLETED") return "invoiced";
-    if (orderStatus === "CANCELLED" || orderStatus === "IN_CANCEL") return "cancelled";
+    // IN_CANCEL is deliberately NOT here: it's the buyer *asking* to cancel while
+    // the seller hasn't answered. Treating it as cancelled closed the SO and
+    // deleted the DO on two real orders the seller then went on to ship and get
+    // paid for (260831S6NJQWNT, 260901TXEYEUV8). Only CANCELLED is final.
+    if (orderStatus === "CANCELLED") return "cancelled";
   }
   return undefined;
 }
@@ -174,64 +179,70 @@ router.post("/", async (req: Request, res: Response) => {
   const credentials = store.credentials;
   const customerId = getShopeeCustomerId();
 
-  try {
-    let row = getOrderRow(orderSn);
-    // Dates every Accurate document below from the order's own placement time
-    // rather than this webhook's arrival time — see ShopeeOrderDetail.createdAt.
-    let detail: ShopeeOrderDetail | undefined;
+  // Shopee fires the PROCESSED status push and the tracking-number push for a new
+  // order within the same second. Without serialising per order, both see "no
+  // row", both create a Sales Order, and the second INSERT dies on the primary
+  // key — leaving an orphan SO in Accurate (observed 9 times in one week).
+  await withOrderLock(`shopee:${orderSn}`, async () => {
+    try {
+      let row = getOrderRow(orderSn);
+      // Dates every Accurate document below from the order's own placement time
+      // rather than this webhook's arrival time — see ShopeeOrderDetail.createdAt.
+      let detail: ShopeeOrderDetail | undefined;
 
-    if (!row) {
-      detail = await loadOrderOrFlag(orderSn, credentials);
-      if (!detail) return;
-      const { salesOrderId, detailItems } = await createSalesOrder(orderSn, detail.lineItems, customerId, detail.createdAt);
-      insertOrderRow(orderSn, salesOrderId);
-      row = getOrderRow(orderSn)!;
-      console.log(`[shopeeWebhook] created Sales Order ${salesOrderId} for order ${orderSn} (store: ${store.name})`);
+      if (!row) {
+        detail = await loadOrderOrFlag(orderSn, credentials);
+        if (!detail) return;
+        const { salesOrderId, detailItems } = await createSalesOrder(orderSn, detail.lineItems, customerId, detail.createdAt);
+        insertOrderRow(orderSn, salesOrderId);
+        row = getOrderRow(orderSn)!;
+        console.log(`[shopeeWebhook] created Sales Order ${salesOrderId} for order ${orderSn} (store: ${store.name})`);
 
-      await pushUpdatedStockFor(detailItems.map((d) => d.itemNo));
-    }
+        await pushUpdatedStockFor(detailItems.map((d) => d.itemNo));
+      }
 
-    const orderStatus = req.body?.data?.status as string | undefined;
+      const orderStatus = req.body?.data?.status as string | undefined;
 
-    const target = impliedStage(code, orderStatus);
+      const target = impliedStage(code, orderStatus);
 
-    if (target === "cancelled") {
-      if (row.status === "created" || row.status === "shipped") {
-        detail = detail ?? (await getShopeeOrderDetail(orderSn, credentials));
-        const affectedSkus = getAffectedAccurateSkus(detail.lineItems);
+      if (target === "cancelled") {
+        if (row.status === "created" || row.status === "shipped") {
+          detail = detail ?? (await getShopeeOrderDetail(orderSn, credentials));
+          const affectedSkus = getAffectedAccurateSkus(detail.lineItems);
 
-        await cancelOrder(row.sales_order_id!, row.delivery_order_id);
-        updateOrderRow(orderSn, { status: "cancelled" });
-        console.log(`[shopeeWebhook] cancelled order ${orderSn} (SO ${row.sales_order_id}, DO ${row.delivery_order_id ?? "none"})`);
+          await cancelOrder(row.sales_order_id!, row.delivery_order_id);
+          updateOrderRow(orderSn, { status: "cancelled" });
+          console.log(`[shopeeWebhook] cancelled order ${orderSn} (SO ${row.sales_order_id}, DO ${row.delivery_order_id ?? "none"})`);
 
-        await pushUpdatedStockFor(affectedSkus);
+          await pushUpdatedStockFor(affectedSkus);
+        } else {
+          console.log(`[shopeeWebhook] no action for order ${orderSn}: current status "${row.status}", incoming code ${code}, order_status "${orderStatus}"`);
+        }
+      } else if (target && row.status !== "cancelled" && STAGE_ORDER.indexOf(target) > STAGE_ORDER.indexOf(row.status)) {
+        detail = detail ?? (await loadOrderOrFlag(orderSn, credentials));
+        if (!detail) return;
+
+        if (row.status === "created") {
+          const deliveryOrderId = await createDeliveryOrder(orderSn, row.sales_order_id!, detail.lineItems, customerId, detail.createdAt);
+          updateOrderRow(orderSn, { delivery_order_id: deliveryOrderId, status: "shipped" });
+          row = { ...row, delivery_order_id: deliveryOrderId, status: "shipped" };
+          console.log(`[shopeeWebhook] created Delivery Order ${deliveryOrderId} for order ${orderSn} (SO ${row.sales_order_id})`);
+
+          await pushUpdatedStockFor(getAffectedAccurateSkus(detail.lineItems));
+        }
+
+        if (target === "invoiced" && row.status === "shipped") {
+          const salesInvoiceId = await createSalesInvoice(orderSn, row.sales_order_id!, row.delivery_order_id!, detail.lineItems, customerId, detail.createdAt);
+          updateOrderRow(orderSn, { sales_invoice_id: salesInvoiceId, status: "invoiced" });
+          console.log(`[shopeeWebhook] created Sales Invoice ${salesInvoiceId} for order ${orderSn}`);
+        }
       } else {
         console.log(`[shopeeWebhook] no action for order ${orderSn}: current status "${row.status}", incoming code ${code}, order_status "${orderStatus}"`);
       }
-    } else if (target && row.status !== "cancelled" && STAGE_ORDER.indexOf(target) > STAGE_ORDER.indexOf(row.status)) {
-      detail = detail ?? (await loadOrderOrFlag(orderSn, credentials));
-      if (!detail) return;
-
-      if (row.status === "created") {
-        const deliveryOrderId = await createDeliveryOrder(orderSn, row.sales_order_id!, detail.lineItems, customerId, detail.createdAt);
-        updateOrderRow(orderSn, { delivery_order_id: deliveryOrderId, status: "shipped" });
-        row = { ...row, delivery_order_id: deliveryOrderId, status: "shipped" };
-        console.log(`[shopeeWebhook] created Delivery Order ${deliveryOrderId} for order ${orderSn} (SO ${row.sales_order_id})`);
-
-        await pushUpdatedStockFor(getAffectedAccurateSkus(detail.lineItems));
-      }
-
-      if (target === "invoiced" && row.status === "shipped") {
-        const salesInvoiceId = await createSalesInvoice(orderSn, row.sales_order_id!, row.delivery_order_id!, detail.lineItems, customerId, detail.createdAt);
-        updateOrderRow(orderSn, { sales_invoice_id: salesInvoiceId, status: "invoiced" });
-        console.log(`[shopeeWebhook] created Sales Invoice ${salesInvoiceId} for order ${orderSn}`);
-      }
-    } else {
-      console.log(`[shopeeWebhook] no action for order ${orderSn}: current status "${row.status}", incoming code ${code}, order_status "${orderStatus}"`);
+    } catch (err: any) {
+      console.error(`[shopeeWebhook] failed to process order ${orderSn}:`, err?.message ?? err);
     }
-  } catch (err: any) {
-    console.error(`[shopeeWebhook] failed to process order ${orderSn}:`, err?.message ?? err);
-  }
+  });
 });
 
 export default router;

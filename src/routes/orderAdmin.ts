@@ -6,6 +6,7 @@ import { createSalesOrder, createDeliveryOrder, createSalesInvoice, getShopeeCus
 import { getTikTokStores, getShopeeStores } from "../services/storesRepo";
 import { callAccurateApi } from "../services/accurateClient";
 import { callShopeeApi, WEBHOOK_URL as SHOPEE_WEBHOOK_URL } from "../services/shopeeClient";
+import { reconcileShopeeOrders, reconcileTikTokOrders } from "../services/orderReconciliation";
 
 const router = Router();
 
@@ -314,9 +315,9 @@ function shopeeStatusToStage(orderStatus: string): OrderStatus | undefined {
     case "READY_TO_SHIP":
     case "PROCESSED":
     case "UNPAID":
+    case "IN_CANCEL": // a cancellation *request*, not a cancellation — see orderReconciliation.ts
       return "created";
     case "CANCELLED":
-    case "IN_CANCEL":
       return "cancelled";
     default:
       return undefined;
@@ -536,6 +537,18 @@ router.get("/accurate/lookup", async (req: Request, res: Response) => {
     res.json(response.data);
   } catch (err: any) {
     res.status(502).json({ error: err?.message ?? "Lookup failed" });
+  }
+});
+
+// On-demand run of the scheduled reconciliation sweep (see orderReconciliation.ts).
+// ?dryRun=1 reports what it would do without writing anything to Accurate.
+router.post("/:platform(shopee|tiktok)/reconcile", async (req: Request, res: Response) => {
+  const dryRun = req.query.dryRun === "1" || req.body?.dryRun === true;
+  try {
+    const report = req.params.platform === "shopee" ? await reconcileShopeeOrders(dryRun) : await reconcileTikTokOrders(dryRun);
+    res.json(report);
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message ?? String(err) });
   }
 });
 
