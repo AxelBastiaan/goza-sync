@@ -46,30 +46,57 @@ export function getShopeeCustomerId(): number {
 // array via toAccurateDetailItems (same filtering, same order) as the document being
 // inspected was created with — so as long as SKU mappings haven't changed since then,
 // zipping by position correctly disambiguates repeated itemNos.
-async function fetchSalesOrderDetailIds(salesOrderId: number): Promise<number[]> {
+// Accurate renders transDate as dd/MM/yyyy (Jakarta calendar date). Parsed to
+// midday Jakarta so a later formatAccurateDate() round-trips to the same day.
+function parseAccurateDate(value: string): Date | undefined {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value ?? "");
+  if (!m) return undefined;
+  return new Date(Date.UTC(Number(m[3]), Number(m[2]) - 1, Number(m[1]), 5, 0, 0));
+}
+
+// Accurate refuses a document dated before its parent ("Tanggal Faktur
+// Penjualan mendahului Tanggal Pengiriman Pesanan"). The order's own placement
+// date is the right date for every document — but when a parent was created
+// late (a Delivery Order written days after the sale, from a delayed webhook,
+// and dated on arrival), the child cannot go earlier than it. Later of the two
+// is the closest legal date; the alternative, failing, leaves the order with no
+// invoice at all — which is how 22 orders got stuck on 2026-09-18.
+function notBefore(requested: Date, parent: Date | undefined): Date {
+  return parent && parent.getTime() > requested.getTime() ? parent : requested;
+}
+
+async function fetchSalesOrderDetailIds(salesOrderId: number): Promise<{ detailIds: number[]; transDate: Date | undefined }> {
   const response = await callAccurateApi("GET", "sales-order/detail.do", { id: salesOrderId });
   if (!response.data?.s) {
     throw new Error(`Accurate sales-order/detail.do failed for SO ${salesOrderId}: ${JSON.stringify(response.data?.d ?? response.status)}`);
   }
 
   const items = (response.data?.d?.detailItem ?? []) as { id: number; seq?: number }[];
-  return items
-    .slice()
-    .sort((a, b) => (a.seq ?? a.id) - (b.seq ?? b.id))
-    .map((item) => item.id);
+  return {
+    detailIds: items
+      .slice()
+      .sort((a, b) => (a.seq ?? a.id) - (b.seq ?? b.id))
+      .map((item) => item.id),
+    transDate: parseAccurateDate(response.data?.d?.transDate),
+  };
 }
 
-async function fetchDeliveryOrderDetailRows(deliveryOrderId: number): Promise<{ id: number; salesOrderDetailId: number }[]> {
+async function fetchDeliveryOrderDetailRows(
+  deliveryOrderId: number
+): Promise<{ rows: { id: number; salesOrderDetailId: number }[]; transDate: Date | undefined }> {
   const response = await callAccurateApi("GET", "delivery-order/detail.do", { id: deliveryOrderId });
   if (!response.data?.s) {
     throw new Error(`Accurate delivery-order/detail.do failed for DO ${deliveryOrderId}: ${JSON.stringify(response.data?.d ?? response.status)}`);
   }
 
   const items = (response.data?.d?.detailItem ?? []) as { id: number; seq?: number; salesOrderDetailId: number }[];
-  return items
-    .slice()
-    .sort((a, b) => (a.seq ?? a.id) - (b.seq ?? b.id))
-    .map((item) => ({ id: item.id, salesOrderDetailId: item.salesOrderDetailId }));
+  return {
+    rows: items
+      .slice()
+      .sort((a, b) => (a.seq ?? a.id) - (b.seq ?? b.id))
+      .map((item) => ({ id: item.id, salesOrderDetailId: item.salesOrderDetailId })),
+    transDate: parseAccurateDate(response.data?.d?.transDate),
+  };
 }
 
 // Converts marketplace order lines into Accurate detail lines, applying each
@@ -244,7 +271,7 @@ export async function createDeliveryOrder(
   transDate: Date = new Date()
 ): Promise<number> {
   const baseDetailItems = await toAccurateDetailItems(lineItems);
-  const soDetailIds = await fetchSalesOrderDetailIds(salesOrderId);
+  const { detailIds: soDetailIds, transDate: soDate } = await fetchSalesOrderDetailIds(salesOrderId);
 
   if (baseDetailItems.length !== soDetailIds.length) {
     throw new Error(
@@ -266,7 +293,7 @@ export async function createDeliveryOrder(
     {},
     {
       customerId,
-      transDate: formatAccurateDate(transDate),
+      transDate: formatAccurateDate(notBefore(transDate, soDate)),
       warehouseId: Number(warehouseId),
       salesOrderId,
       // Raw order id, same as the Sales Invoice's `number` — confirmed live these
@@ -299,7 +326,7 @@ export async function createSalesInvoice(
   transDate: Date = new Date()
 ): Promise<number> {
   const baseDetailItems = await toAccurateDetailItems(lineItems);
-  const doDetailRows = await fetchDeliveryOrderDetailRows(deliveryOrderId);
+  const { rows: doDetailRows, transDate: doDate } = await fetchDeliveryOrderDetailRows(deliveryOrderId);
 
   if (baseDetailItems.length !== doDetailRows.length) {
     throw new Error(
@@ -324,7 +351,9 @@ export async function createSalesInvoice(
     {
       customerId,
       number: orderId,
-      transDate: formatAccurateDate(transDate),
+      // A DO can never be dated before its SO (Accurate enforces it), so the DO's
+      // date is the binding floor here.
+      transDate: formatAccurateDate(notBefore(transDate, doDate)),
       warehouseId: Number(warehouseId),
       salesOrderId,
       deliveryOrderId,
