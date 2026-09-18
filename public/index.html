@@ -14,6 +14,7 @@
     <div class="nav-item" data-view="import"><span class="nav-icon">⬇️</span> Import</div>
     <div class="nav-item" data-view="recall"><span class="nav-icon">📋</span> Sales Recall</div>
     <div class="nav-item" data-view="opname"><span class="nav-icon">🧮</span> Stock Opname</div>
+    <div class="nav-item" data-view="invoices"><span class="nav-icon">🧾</span> Invoice Reminders <span class="nav-badge" id="ir-nav-badge" hidden>0</span></div>
     <div class="nav-item" data-view="alerts"><span class="nav-icon">🚩</span> SKU Alerts <span class="nav-badge" id="alerts-nav-badge" hidden>0</span></div>
     <div class="nav-item" data-view="settings"><span class="nav-icon">⚙️</span> Settings</div>
     <div class="nav-item" id="logout-btn" style="margin-top:auto;"><span class="nav-icon">🚪</span> Log out</div>
@@ -137,6 +138,44 @@
       </main>
     </section>
 
+    <!-- ============ Invoice Reminders view ============ -->
+    <section class="view" id="view-invoices" hidden>
+      <main class="card">
+        <h2>Invoice Reminders</h2>
+        <p class="subtitle">Customers with overdue invoices in Accurate. WhatsApp reminders at +3 / +7 / +10 days after the due date — never more than one per customer every 3 days, all their invoices in one letter. At +14 the invoices are handed to the salesperson. Payment status is re-checked in Accurate before every PDF / WhatsApp.</p>
+
+        <p id="ir-message" class="message" hidden></p>
+        <div id="ir-golive" hidden></div>
+
+        <div class="ir-stats" id="ir-stats"></div>
+
+        <div class="tabbar" id="ir-tabbar">
+          <button type="button" class="tab-btn active" data-ir-tab="send">To send <span class="nav-badge" id="ir-tb-send" hidden>0</span></button>
+          <button type="button" class="tab-btn" data-ir-tab="sales">Forward to sales <span class="nav-badge" id="ir-tb-sales" hidden>0</span></button>
+          <button type="button" class="tab-btn" data-ir-tab="waiting">Waiting</button>
+          <button type="button" class="tab-btn" data-ir-tab="withsales">With sales</button>
+          <button type="button" class="tab-btn" data-ir-tab="ignored">Ignored</button>
+          <button type="button" class="tab-btn" data-ir-tab="log">Log</button>
+          <button type="button" class="tab-btn" data-ir-tab="people">Salespeople</button>
+        </div>
+
+        <div class="ir-filters" id="ir-filters">
+          <button type="button" class="secondary icon-btn" id="ir-refresh-btn" title="Re-read everything from Accurate (incl. phone numbers)">↻</button>
+          <input type="text" id="ir-q" placeholder="Search customer / invoice…" />
+          <select id="ir-sp"><option value="">All salespeople</option></select>
+          <label><input type="checkbox" id="ir-phone" /> Only with WA number</label>
+          <select id="ir-sort">
+            <option value="owing">Sort: biggest amount</option>
+            <option value="late">Sort: most days late</option>
+            <option value="name">Sort: name</option>
+          </select>
+        </div>
+        <p id="ir-sync-info" class="ir-sync-info"></p>
+
+        <div id="ir-list"></div>
+      </main>
+    </section>
+
     <!-- ============ SKU Alerts view ============ -->
     <section class="view" id="view-alerts" hidden>
       <main class="card">
@@ -211,8 +250,21 @@
     </div>
   </div>
 
+  <div class="modal-overlay" id="ir-modal">
+    <div class="modal">
+      <h2 id="ir-modal-title">WhatsApp</h2>
+      <div id="ir-modal-to" class="ir-modal-to"></div>
+      <div id="ir-modal-body" class="wa-bubble"></div>
+      <div class="modal-footer">
+        <button type="button" class="secondary" id="ir-modal-close">Close</button>
+        <a id="ir-modal-open" class="ir-wa-link" target="_blank" rel="noopener">Open WhatsApp</a>
+      </div>
+    </div>
+  </div>
+
   <div class="toast-container" id="toast-container"></div>
 
   <script src="/app.js"></script>
+  <script src="/invoiceReminders.js"></script>
 </body>
 </html>

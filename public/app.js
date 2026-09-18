@@ -17,6 +17,7 @@ function switchView(view) {
   if (view === "recall") { loadRecallStatus(); loadRecallFiles(); }
   if (view === "opname") loadOpnameChecklist();
   if (view === "alerts") loadAlerts();
+  if (view === "invoices") loadInvoiceReminders();
 }
 document.querySelectorAll(".nav-item").forEach((item) => {
   item.addEventListener("click", () => switchView(item.dataset.view));

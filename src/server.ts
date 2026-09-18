@@ -22,10 +22,12 @@ import orderAdminRouter from "./routes/orderAdmin";
 import salesRecallRouter from "./routes/salesRecall";
 import stockOpnameRouter from "./routes/stockOpname";
 import skuAlertsRouter from "./routes/skuAlerts";
+import invoiceRemindersRouter from "./routes/invoiceReminders";
 import { renewAccurateWebhook } from "./services/accurateWebhookRenewal";
 import { renewAllShopeeStores } from "./services/shopeeAuth";
 import { renewAllTikTokStores } from "./services/tiktokAuth";
 import { reconcileAllOrders } from "./services/orderReconciliation";
+import { refreshFromAccurate as refreshInvoiceReminders } from "./services/invoiceReminders/sync";
 
 const app = express();
 app.use(
@@ -94,6 +96,7 @@ app.use("/api/order-admin", requireAuth, orderAdminRouter);
 app.use("/api/sales-recall", requireAuth, salesRecallRouter);
 app.use("/api/stock-opname", requireAuth, stockOpnameRouter);
 app.use("/api/sku-alerts", requireAuth, skuAlertsRouter);
+app.use("/api/invoice-reminders", requireAuth, invoiceRemindersRouter);
 
 const PORT = Number(getEnv("PORT") || 8000);
 
@@ -138,3 +141,15 @@ setTimeout(() => {
 setInterval(() => {
   reconcileAllOrders().catch((err) => console.error("[reconcile] sweep failed:", err.message));
 }, ORDER_RECONCILE_INTERVAL_MS);
+
+// Keeps the Invoice Reminders queue (and its sidebar badge) current without
+// anyone opening the tab: overdue/paid status is re-read from Accurate every few
+// hours. The tab itself also re-syncs on open when the data is >30 min old.
+const INVOICE_REMINDER_REFRESH_INTERVAL_MS = 3 * 60 * 60 * 1000;
+
+setTimeout(() => {
+  refreshInvoiceReminders().catch((err) => console.error("[invoiceReminders] initial refresh failed:", err.message));
+}, 3 * 60 * 1000);
+setInterval(() => {
+  refreshInvoiceReminders().catch((err) => console.error("[invoiceReminders] refresh failed:", err.message));
+}, INVOICE_REMINDER_REFRESH_INTERVAL_MS);

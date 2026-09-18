@@ -212,3 +212,140 @@ db.exec(`
     UNIQUE (platform, marketplace_sku)
   )
 `);
+
+// ---- Invoice reminders (overdue piutang → WhatsApp reminders the admin sends) ----
+
+// One row per overdue, unpaid sales invoice seen in Accurate (non-marketplace
+// customers only). Accurate stays the source of truth for amounts/payment — this
+// table only adds the reminder bookkeeping on top:
+// - effective_due_date is the date the +3/+7/+10/+14 schedule counts from. It
+//   equals due_date for invoices that go overdue while the feature is live; for
+//   the backlog that was already overdue at go-live it's shifted so the cycle
+//   starts from scratch (spread over the first working days), and it stays NULL
+//   until the feature goes live, which keeps everything out of the queues.
+// - stage_sent = how many of the three customer reminders this invoice has been
+//   covered by (0-3).
+// - escalated_at = the day it was handed to the salesperson (+14); customer
+//   reminders stop for it after that.
+// - paid_at = the first refresh that no longer saw it as outstanding+overdue in
+//   Accurate (paid, or its due date was moved). It reappears (paid_at cleared) if
+//   Accurate lists it again.
+// dpp/tax/payment_term/salesman_name come from sales-invoice/detail.do and are
+// refreshed together with the cached lines (detail_fetched_date).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS invoice_reminder_invoices (
+    invoice_id INTEGER PRIMARY KEY,
+    number TEXT NOT NULL,
+    customer_id INTEGER NOT NULL,
+    trans_date TEXT NOT NULL,
+    due_date TEXT NOT NULL,
+    effective_due_date TEXT,
+    total_amount REAL NOT NULL,
+    prime_owing REAL NOT NULL,
+    stage_sent INTEGER NOT NULL DEFAULT 0,
+    escalated_at TEXT,
+    paid_at TEXT,
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    dpp_amount REAL,
+    tax_amount REAL,
+    payment_term TEXT,
+    salesman_name TEXT,
+    detail_fetched_date TEXT
+  )
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_invoice_reminder_invoices_customer ON invoice_reminder_invoices (customer_id)`);
+
+// Line items per invoice for the letter's attachment pages, cached from
+// sales-invoice/detail.do (refetched at most once per day per invoice).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS invoice_reminder_lines (
+    invoice_id INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    item_no TEXT,
+    item_name TEXT,
+    quantity REAL,
+    unit TEXT,
+    unit_price REAL,
+    disc_percent TEXT,
+    cash_discount REAL,
+    total_price REAL,
+    PRIMARY KEY (invoice_id, seq)
+  )
+`);
+
+// Customer contact data from customer/detail.do. phone is the raw Accurate value
+// (can be messy, e.g. "081392834404 WA") — the WhatsApp number is derived from it
+// at use time. ignored = the admin chose to never remind this customer (related
+// party, special arrangement, disputed); review_note = why it was flagged for a
+// look before go-live.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS invoice_reminder_customers (
+    customer_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    customer_no TEXT,
+    contact_name TEXT,
+    phone TEXT,
+    salesman_id INTEGER,
+    ignored INTEGER NOT NULL DEFAULT 0,
+    ignored_note TEXT,
+    review_note TEXT,
+    fetched_at TEXT
+  )
+`);
+
+// Salespeople the +14 hand-off goes to, with the Accurate salesman ids that map
+// to them (a person can have more than one id). Seeded once below; their WhatsApp
+// numbers are entered from the Invoice Reminders tab ("Salespeople") and live
+// only in the database — this repo is public, so personal numbers never go in code.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS invoice_reminder_salespeople (
+    name TEXT PRIMARY KEY,
+    salesman_ids TEXT NOT NULL,
+    phone TEXT
+  )
+`);
+{
+  const seed = db.prepare("INSERT OR IGNORE INTO invoice_reminder_salespeople (name, salesman_ids) VALUES (?, ?)");
+  // Ids mirror sales-recall/services/salesConfig.ts.
+  seed.run("HODORI", "[152]");
+  seed.run("RICKYANTO", "[153,53200]");
+  seed.run("SHIVA", "[53951]");
+  seed.run("SOETRISNO", "[102]");
+  seed.run("TEDDY", "[157]");
+  seed.run("YOYOK", "[151]");
+}
+
+// Every reminder the admin marked as sent (kind='customer') and every hand-off to
+// a salesperson (kind='sales'). The latest non-undone customer row is what the
+// 3-day gap is measured from. snapshot holds the per-invoice state from just
+// before the action, so Undo can put it back exactly.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS invoice_reminder_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    customer_id INTEGER,
+    salesperson TEXT,
+    stage INTEGER,
+    letter_no TEXT,
+    invoice_ids TEXT NOT NULL,
+    total_owing REAL,
+    snapshot TEXT NOT NULL,
+    sent_by TEXT,
+    sent_at TEXT NOT NULL,
+    sent_date TEXT NOT NULL,
+    undone_at TEXT
+  )
+`);
+
+// JT-YYMM#### letter numbers: one per PDF produced, counting up from 0001 each
+// month. A re-download of the same customer's letter on the same day (same
+// invoices) reuses its number instead of burning a new one.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS invoice_reminder_letters (
+    letter_no TEXT PRIMARY KEY,
+    customer_id INTEGER NOT NULL,
+    issued_date TEXT NOT NULL,
+    invoice_ids TEXT NOT NULL
+  )
+`);

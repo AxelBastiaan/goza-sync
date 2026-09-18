@@ -27,6 +27,8 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY package.json ./
 COPY public ./public
+# Letterhead for the invoice-reminder letters (services/invoiceReminders/letterPdf.ts).
+COPY assets ./assets
 COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
 
