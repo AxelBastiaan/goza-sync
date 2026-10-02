@@ -48,8 +48,20 @@ async function fetchTikTokListings(): Promise<Listing[]> {
 
 // Shopee: a non-variant item carries its SKU and stock on the item itself
 // (has_model false, model_id 0 by convention); a variant item carries them per
-// model. stock_info_v2.summary_info.total_available_stock is the number a buyer
-// effectively sees, and is what pushShopeeQuantity sets.
+// model.
+//
+// Compare seller_stock, NOT summary_info.total_available_stock. seller_stock is
+// the number pushShopeeQuantity sets and the one that corresponds to Accurate's
+// availableToSell. summary_info nets out stock Shopee has reserved for a running
+// campaign, so a listing in a promotion reports a much smaller number while being
+// perfectly in sync — comparing against it reported 84 false "drifted" listings
+// (GZ-201-* showed 10 against a seller_stock of exactly the expected 500).
+// Total across stock locations — update_stock sets a single unnamed location, but
+// a seller can hold stock in more than one, and the sum is what is sellable.
+function sellerStock(stockInfo: any): number {
+  return (stockInfo?.seller_stock ?? []).reduce((sum: number, s: any) => sum + Number(s.stock ?? 0), 0);
+}
+
 async function fetchShopeeListings(): Promise<Listing[]> {
   const credentials = getShopeeStores()[0].credentials;
   const listings: Listing[] = [];
@@ -76,7 +88,7 @@ async function fetchShopeeListings(): Promise<Listing[]> {
         if (!item.item_sku) continue;
         listings.push({
           sku: item.item_sku,
-          quantity: Number(item.stock_info_v2?.summary_info?.total_available_stock ?? 0),
+          quantity: sellerStock(item.stock_info_v2),
           label: `item ${item.item_id}`,
         });
       }
@@ -88,7 +100,7 @@ async function fetchShopeeListings(): Promise<Listing[]> {
         if (!model.model_sku) continue;
         listings.push({
           sku: model.model_sku,
-          quantity: Number(model.stock_info_v2?.summary_info?.total_available_stock ?? 0),
+          quantity: sellerStock(model.stock_info_v2),
           label: `item ${item.item_id}/model ${model.model_id}`,
         });
       }
