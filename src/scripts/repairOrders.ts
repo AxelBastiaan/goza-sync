@@ -5,6 +5,12 @@
 //              unmapped and got silently dropped, so the documents are short and
 //              no invoice can be hung off them. Delete the short document(s),
 //              recreate them complete from today's resolution, then invoice.
+//   rechannel — the order was booked against the wrong Accurate customer. Accurate
+//              silently ignores a customerId change on a document that is part of a
+//              completed SO->DO->SI chain (it answers "berhasil disimpan" and keeps
+//              the old customer — verified again on SI 342118), so the only way is
+//              to delete the chain and rewrite it. Totals and dates are preserved
+//              because they are recomputed from the marketplace order itself.
 //   dedupe   — the order already has a manually-entered, paid invoice from before
 //              automation; our SO+DO are duplicates and the DO is decrementing
 //              stock a second time. Delete both and point the row at the real
@@ -12,12 +18,14 @@
 //
 //   node dist/scripts/repairOrders.js rebuild shopee 2608234WETPUQ6
 //   node dist/scripts/repairOrders.js dedupe  tiktok 585513281916339433 337902
+//   node dist/scripts/repairOrders.js rechannel tiktok 586107964603729275 87350
 import { db } from "../db";
 import { callAccurateApi } from "../services/accurateClient";
 import { getShopeeStores, getTikTokStores } from "../services/storesRepo";
 import { getShopeeOrderDetail } from "../services/shopeeOrders";
 import { getOrderDetail } from "../services/tiktokOrders";
 import {
+  getTokopediaCustomerId,
   createSalesOrder,
   createDeliveryOrder,
   createSalesInvoice,
@@ -128,12 +136,70 @@ async function dedupe(platform: Platform, orderId: string, existingInvoiceId: nu
   console.log(`  row now points at SI ${existingInvoiceId}`);
 }
 
+async function rechannel(platform: Platform, orderId: string, customerId: number): Promise<void> {
+  const row = getRow(platform, orderId);
+  if (!row.sales_invoice_id) throw new Error(`${orderId} has no invoice — use rebuild instead`);
+
+  const before = await callAccurateApi("GET", "sales-invoice/detail.do", { id: row.sales_invoice_id });
+  if (!before.data?.s) throw new Error(`sales-invoice/detail.do failed for ${row.sales_invoice_id}`);
+  const old = before.data.d;
+  if (String(old?.number).toUpperCase() !== orderId.toUpperCase()) {
+    throw new Error(`SI ${row.sales_invoice_id} is numbered ${old?.number}, not ${orderId} — refusing`);
+  }
+  if (old?.customer?.id === customerId) {
+    console.log(`${orderId}: already booked to ${old.customer.name} — nothing to do`);
+    return;
+  }
+  // A paid invoice has payments attached to the customer; unwinding that is a
+  // human decision, not something to do automatically.
+  if (old?.statusName && old.statusName !== "Belum Lunas") {
+    throw new Error(`SI ${row.sales_invoice_id} is "${old.statusName}", not unpaid — refusing to delete a settled invoice`);
+  }
+  console.log(`${orderId}: SI ${row.sales_invoice_id} ${old.transDate} ${old.customer?.name} total ${old.totalAmount} (${(old.detailItem ?? []).length} line(s)) → customer ${customerId}`);
+
+  const detail = await fetchOrder(platform, orderId);
+  const { details, unresolved } = await resolveOrderLines(detail.lineItems);
+  if (unresolved.length > 0) throw new Error(`unmapped: ${unresolved.map((u) => u.sellerSku).join(", ")}`);
+  if (details.length !== (old.detailItem ?? []).length) {
+    throw new Error(`order resolves to ${details.length} line(s) but the existing invoice has ${(old.detailItem ?? []).length} — rebuild first`);
+  }
+
+  const r = await callAccurateApi("POST", "sales-invoice/delete.do", { id: row.sales_invoice_id });
+  if (!r.data?.s) throw new Error(`sales-invoice/delete.do failed for ${row.sales_invoice_id}: ${JSON.stringify(r.data?.d ?? r.status)}`);
+  console.log(`  deleted sales-invoice ${row.sales_invoice_id}`);
+  if (row.delivery_order_id) await deleteDoc("delivery-order", row.delivery_order_id);
+  if (row.sales_order_id) await deleteDoc("sales-order", row.sales_order_id);
+
+  const salesOrderId = (await createSalesOrder(orderId, detail.lineItems, customerId, detail.createdAt)).salesOrderId;
+  console.log(`  created SO ${salesOrderId}`);
+  const deliveryOrderId = await createDeliveryOrder(orderId, salesOrderId, detail.lineItems, customerId, detail.createdAt);
+  console.log(`  created DO ${deliveryOrderId}`);
+  const salesInvoiceId = await createSalesInvoice(orderId, salesOrderId, deliveryOrderId, detail.lineItems, customerId, detail.createdAt);
+  console.log(`  created SI ${salesInvoiceId}`);
+
+  const after = await callAccurateApi("GET", "sales-invoice/detail.do", { id: salesInvoiceId });
+  const fresh = after.data?.d;
+  console.log(`  now: ${fresh?.number} ${fresh?.transDate} ${fresh?.customer?.name} total ${fresh?.totalAmount}`);
+  if (Number(fresh?.totalAmount) !== Number(old.totalAmount)) {
+    console.log(`  WARNING: total changed from ${old.totalAmount} to ${fresh?.totalAmount} — check this order`);
+  }
+
+  const t = table(platform);
+  db.prepare(`UPDATE ${t.name} SET sales_order_id = ?, delivery_order_id = ?, sales_invoice_id = ?, status = 'invoiced' WHERE ${t.key} = ?`).run(
+    salesOrderId,
+    deliveryOrderId,
+    salesInvoiceId,
+    orderId
+  );
+}
+
 async function main(): Promise<void> {
   const [cmd, platform, orderId, siId] = process.argv.slice(2);
   if (platform !== "shopee" && platform !== "tiktok") throw new Error("platform must be shopee|tiktok");
   if (cmd === "rebuild" && orderId) return rebuild(platform, orderId);
   if (cmd === "dedupe" && orderId && siId) return dedupe(platform, orderId, Number(siId));
-  throw new Error("usage: rebuild <platform> <orderId> | dedupe <platform> <orderId> <existingSiId>");
+  if (cmd === "rechannel" && orderId) return rechannel(platform, orderId, siId ? Number(siId) : getTokopediaCustomerId());
+  throw new Error("usage: rebuild <platform> <orderId> | dedupe <platform> <orderId> <existingSiId> | rechannel <platform> <orderId> [customerId]");
 }
 
 main().catch((err) => {

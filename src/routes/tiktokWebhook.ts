@@ -1,7 +1,14 @@
 import { Router, Request, Response } from "express";
 import { db } from "../db";
 import { getOrderDetail, TikTokOrderDetail, OrderLineItem } from "../services/tiktokOrders";
-import { createSalesOrder, createDeliveryOrder, createSalesInvoice, cancelOrder, resolveOrderLines } from "../services/accurateSalesFlow";
+import {
+  createSalesOrder,
+  createDeliveryOrder,
+  createSalesInvoice,
+  cancelOrder,
+  resolveOrderLines,
+  customerIdForCommercePlatform,
+} from "../services/accurateSalesFlow";
 import { recordUnmappedSkus } from "../services/skuAlerts";
 import { withOrderLock } from "../services/orderLock";
 import { verifyWebhookSignature, TikTokStoreCredentials } from "../services/tiktokClient";
@@ -202,7 +209,7 @@ router.post("/", async (req: Request, res: Response) => {
       if (!row) {
         detail = await loadOrderOrFlag(orderId, credentials);
         if (!detail) return;
-        const { salesOrderId, detailItems } = await createSalesOrder(orderId, detail.lineItems, undefined, detail.createdAt);
+        const { salesOrderId, detailItems } = await createSalesOrder(orderId, detail.lineItems, customerIdForCommercePlatform(detail.commercePlatform), detail.createdAt);
         insertOrderRow(orderId, salesOrderId);
         row = getOrderRow(orderId)!;
         console.log(`[tiktokWebhook] created Sales Order ${salesOrderId} for order ${orderId} (store: ${store.name})`);
@@ -239,7 +246,13 @@ router.post("/", async (req: Request, res: Response) => {
         if (!detail) return;
 
         if (row.status === "created") {
-          const deliveryOrderId = await createDeliveryOrder(orderId, row.sales_order_id!, detail.lineItems, undefined, detail.createdAt);
+          const deliveryOrderId = await createDeliveryOrder(
+          orderId,
+          row.sales_order_id!,
+          detail.lineItems,
+          customerIdForCommercePlatform(detail.commercePlatform),
+          detail.createdAt
+        );
           updateOrderRow(orderId, { delivery_order_id: deliveryOrderId, status: "shipped" });
           row = { ...row, delivery_order_id: deliveryOrderId, status: "shipped" };
           console.log(`[tiktokWebhook] created Delivery Order ${deliveryOrderId} for order ${orderId} (SO ${row.sales_order_id})`);
@@ -252,7 +265,14 @@ router.post("/", async (req: Request, res: Response) => {
         }
 
         if (target === "invoiced" && row.status === "shipped") {
-          const salesInvoiceId = await createSalesInvoice(orderId, row.sales_order_id!, row.delivery_order_id!, detail.lineItems, undefined, detail.createdAt);
+          const salesInvoiceId = await createSalesInvoice(
+          orderId,
+          row.sales_order_id!,
+          row.delivery_order_id!,
+          detail.lineItems,
+          customerIdForCommercePlatform(detail.commercePlatform),
+          detail.createdAt
+        );
           updateOrderRow(orderId, { sales_invoice_id: salesInvoiceId, status: "invoiced" });
           console.log(`[tiktokWebhook] created Sales Invoice ${salesInvoiceId} for order ${orderId}`);
         }

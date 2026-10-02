@@ -33,6 +33,24 @@ export function getShopeeCustomerId(): number {
   return Number(id);
 }
 
+// Tokopedia sales arrive through the same TikTok order API (one order system
+// since the merger) but are a separate sales channel and must not be attributed
+// to TikTok — see CommercePlatform in tiktokOrders.ts.
+export function getTokopediaCustomerId(): number {
+  const id = getEnv("ACCURATE_TOKOPEDIA_CUSTOMER_ID");
+  if (!id) {
+    throw new Error("ACCURATE_TOKOPEDIA_CUSTOMER_ID is not set in .env");
+  }
+  return Number(id);
+}
+
+// Which Accurate customer an order coming through the TikTok API belongs to.
+// Falls back to TikTok when the platform is unknown (an older API response, or a
+// value TikTok adds later) — the previous behaviour, so nothing regresses.
+export function customerIdForCommercePlatform(platform: string | undefined): number {
+  return platform === "TOKOPEDIA" ? getTokopediaCustomerId() : getTikTokCustomerId();
+}
+
 // Fetches a document's detail rows in creation order (by seq, falling back to id).
 // Needed because when an order has two lines mapped to the same Accurate SKU (e.g.
 // separate PAK and CTN listings both backed by the same item), bare itemNo matching

@@ -9,7 +9,7 @@ import {
   reopenSalesOrder,
   resolveOrderLines,
   getShopeeCustomerId,
-  getTikTokCustomerId,
+  customerIdForCommercePlatform,
 } from "./accurateSalesFlow";
 import { recordUnmappedSkus } from "./skuAlerts";
 
@@ -239,7 +239,6 @@ export async function reconcileTikTokOrders(dryRun: boolean): Promise<ReconcileR
     throw new Error(`Expected exactly one connected TikTok store, found ${stores.length}`);
   }
   const credentials = stores[0].credentials;
-  const customerId = getTikTokCustomerId();
 
   const rows = db
     .prepare("SELECT order_id AS key, sales_order_id, delivery_order_id, sales_invoice_id, status, created_at FROM tiktok_orders WHERE status != 'invoiced'")
@@ -278,7 +277,18 @@ export async function reconcileTikTokOrders(dryRun: boolean): Promise<ReconcileR
       } else {
         const detail = await getOrderDetail(row.key, credentials);
         if (detail.lineItems.length === 0) throw new Error("TikTok returned no line items");
-        entry.result = await advance("tiktok", "tiktok_orders", "order_id", row, target, detail.lineItems, detail.createdAt, customerId);
+        // A Tokopedia sale comes through this same API — book it against its own
+        // customer rather than TikTok's (see CommercePlatform in tiktokOrders.ts).
+        entry.result = await advance(
+          "tiktok",
+          "tiktok_orders",
+          "order_id",
+          row,
+          target,
+          detail.lineItems,
+          detail.createdAt,
+          customerIdForCommercePlatform(detail.commercePlatform)
+        );
       }
       console.log(`[reconcile] tiktok ${row.key}: ${entry.action} → ${entry.result}`);
     } catch (err: any) {

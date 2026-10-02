@@ -31,8 +31,17 @@ export async function getOrderStatus(orderId: string, credentials: TikTokStoreCr
   return data?.data?.orders?.[0]?.status;
 }
 
+// Which storefront the order was actually placed on. TikTok Shop and Tokopedia
+// share one order API since the merger, so an order arriving through the TikTok
+// webhook may really be a Tokopedia sale — confirmed live: commerce_platform is
+// "TIKTOK_SHOP" or "TOKOPEDIA". The two must be booked against different Accurate
+// customers or per-channel revenue reporting is wrong (3 orders were booked as
+// TikTok before this was noticed).
+export type CommercePlatform = "TIKTOK_SHOP" | "TOKOPEDIA";
+
 export interface TikTokOrderDetail {
   lineItems: OrderLineItem[];
+  commercePlatform: CommercePlatform | undefined;
   // When the buyer actually placed the order. Used as the transDate on the
   // Accurate documents so a sale is booked in the period it really happened,
   // rather than whenever the webhook that triggered the write arrived — those
@@ -53,7 +62,7 @@ export async function getOrderDetail(orderId: string, credentials: TikTokStoreCr
 
   if (data?.code !== 0) {
     console.warn(`[tiktokOrders] order detail request failed for ${orderId}: ${data?.message ?? response.status}`);
-    return { lineItems: [], createdAt: undefined };
+    return { lineItems: [], commercePlatform: undefined, createdAt: undefined };
   }
 
   const orders = data?.data?.orders ?? [];
@@ -61,7 +70,7 @@ export async function getOrderDetail(orderId: string, credentials: TikTokStoreCr
 
   if (!order) {
     console.warn(`[tiktokOrders] no order found for id ${orderId}`);
-    return { lineItems: [], createdAt: undefined };
+    return { lineItems: [], commercePlatform: undefined, createdAt: undefined };
   }
 
   const lineItems = order.line_items ?? order.order_line_list ?? [];
@@ -104,6 +113,7 @@ export async function getOrderDetail(orderId: string, credentials: TikTokStoreCr
 
   return {
     lineItems: results,
+    commercePlatform: order.commerce_platform as CommercePlatform | undefined,
     createdAt: order.create_time ? new Date(order.create_time * 1000) : undefined,
   };
 }
