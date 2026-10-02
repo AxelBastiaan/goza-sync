@@ -27,6 +27,8 @@ import { renewAccurateWebhook } from "./services/accurateWebhookRenewal";
 import { renewAllShopeeStores } from "./services/shopeeAuth";
 import { renewAllTikTokStores } from "./services/tiktokAuth";
 import { reconcileAllOrders } from "./services/orderReconciliation";
+import { runStockSync } from "./services/stockSync";
+import { runShopeeStockSync } from "./services/shopeeStockSync";
 import { refreshFromAccurate as refreshInvoiceReminders } from "./services/invoiceReminders/sync";
 
 const app = express();
@@ -153,3 +155,44 @@ setTimeout(() => {
 setInterval(() => {
   refreshInvoiceReminders().catch((err) => console.error("[invoiceReminders] refresh failed:", err.message));
 }, INVOICE_REMINDER_REFRESH_INTERVAL_MS);
+
+// Full catalogue stock sweep. Everything else that pushes stock is event-driven —
+// an Accurate stock-change webhook, or an order arriving — so a listing only gets
+// corrected when its own item moves. A listing edited by hand on the marketplace,
+// or one whose push failed once, then stays wrong indefinitely: a drift check on
+// 2026-10-02 found 232 listings showing less stock than Accurate had, some at 0
+// while Accurate held 500, which means those products simply stopped selling.
+// This re-pushes every mapped SKU regardless of whether anything changed.
+//
+// Six-hourly rather than more often because a full sweep walks both marketplaces'
+// entire catalogues (~1000 listings each) and every mapped Accurate item; the
+// event-driven pushes remain the fast path, this is only the backstop.
+const FULL_STOCK_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+async function runFullStockSync(): Promise<void> {
+  for (const [platform, run] of [
+    ["TikTok", runStockSync],
+    ["Shopee", runShopeeStockSync],
+  ] as const) {
+    try {
+      const results = await run();
+      const counts: Record<string, number> = {};
+      for (const r of results) counts[r.status] = (counts[r.status] ?? 0) + 1;
+      console.log(`[fullStockSync] ${platform}: ${JSON.stringify(counts)}`);
+      for (const r of results.filter((x) => x.status === "error")) {
+        console.error(`[fullStockSync] ${platform} ${r.marketplaceSku}: ${r.message}`);
+      }
+    } catch (err: any) {
+      console.error(`[fullStockSync] ${platform} sweep failed:`, err?.message ?? err);
+    }
+  }
+}
+
+// Delayed on boot so a redeploy doesn't immediately re-walk both catalogues on
+// top of the token renewals and the order reconciliation above.
+setTimeout(() => {
+  runFullStockSync().catch((err) => console.error("[fullStockSync] initial sweep failed:", err.message));
+}, 15 * 60 * 1000);
+setInterval(() => {
+  runFullStockSync().catch((err) => console.error("[fullStockSync] sweep failed:", err.message));
+}, FULL_STOCK_SYNC_INTERVAL_MS);
